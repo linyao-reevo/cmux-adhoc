@@ -752,6 +752,8 @@ class TabManager: ObservableObject {
         let panelId: UUID
         let branch: String
         let repoSlugs: [String]
+        let priorReviewStatusRawValue: String?
+        let priorCIStatusRawValue: String?
     }
 
     private struct WorkspacePullRequestResolvedItem: Sendable {
@@ -900,19 +902,25 @@ class TabManager: ObservableObject {
         let url: String
         let updatedAt: String?
         let headRefName: String?
+        let reviewDecision: String?
+        let ciStatusRollup: String?
 
         init(
             number: Int,
             state: String,
             url: String,
             updatedAt: String?,
-            headRefName: String? = nil
+            headRefName: String? = nil,
+            reviewDecision: String? = nil,
+            ciStatusRollup: String? = nil
         ) {
             self.number = number
             self.state = state
             self.url = url
             self.updatedAt = updatedAt
             self.headRefName = headRefName
+            self.reviewDecision = reviewDecision
+            self.ciStatusRollup = ciStatusRollup
         }
     }
 
@@ -929,7 +937,7 @@ class TabManager: ObservableObject {
     /// Static so port ranges don't overlap across multiple windows (each window has its own TabManager).
     private static var nextPortOrdinal: Int = 0
     private nonisolated static let initialWorkspaceGitProbeDelays: [TimeInterval] = [0, 0.5, 1.5, 3.0, 6.0, 10.0]
-    private nonisolated static let backgroundPollInterval: TimeInterval = 60
+    private nonisolated static let backgroundPollInterval: TimeInterval = 30
     private nonisolated static let selectedPollInterval: TimeInterval = 10
     private nonisolated static let workspacePullRequestPollTickInterval: TimeInterval = 1
     private nonisolated static let workspacePullRequestRepoCacheLifetime: TimeInterval = 15
@@ -1323,24 +1331,9 @@ class TabManager: ObservableObject {
                 now: now,
                 allowCachedResults: allowCachedResults
             )
-            var results = Self.resolveWorkspacePullRequestRefreshResults(
+            let results = Self.resolveWorkspacePullRequestRefreshResults(
                 candidates: candidates,
                 repoResults: repoResults
-            )
-            guard !Task.isCancelled else { return }
-
-            // Fetch review status for open PRs
-            let reviewConfiguration = URLSessionConfiguration.ephemeral
-            reviewConfiguration.timeoutIntervalForRequest = max(Self.workspacePullRequestProbeTimeout, 8)
-            reviewConfiguration.timeoutIntervalForResource = max(Self.workspacePullRequestProbeTimeout, 8)
-            let reviewSession = URLSession(configuration: reviewConfiguration)
-            let reviewAuthHeader = Self.workspacePullRequestAuthHeaderValue()
-
-            results = await Self.enrichResultsWithGraphQL(
-                results: results,
-                candidates: candidates,
-                session: reviewSession,
-                authHeader: reviewAuthHeader
             )
             guard !Task.isCancelled else { return }
 
@@ -1379,11 +1372,14 @@ class TabManager: ObservableObject {
     ) -> WorkspacePullRequestCandidate {
         let directory = gitProbeDirectory(for: workspace, panelId: panelId)
         let repoSlugs = directory.map(Self.githubRepositorySlugs(directory:)) ?? []
+        let priorState = workspace.panelPullRequests[panelId]
         return WorkspacePullRequestCandidate(
             workspaceId: workspace.id,
             panelId: panelId,
             branch: branch,
-            repoSlugs: repoSlugs
+            repoSlugs: repoSlugs,
+            priorReviewStatusRawValue: priorState?.reviewStatus?.rawValue,
+            priorCIStatusRawValue: priorState?.ciStatus?.rawValue
         )
     }
 
@@ -1522,7 +1518,9 @@ class TabManager: ObservableObject {
                         url: currentPullRequest.url,
                         status: currentPullRequest.status,
                         branch: currentPullRequest.branch,
-                        isStale: true
+                        isStale: true,
+                        reviewStatus: currentPullRequest.reviewStatus,
+                        ciStatus: currentPullRequest.ciStatus
                     )
                 }
             }
@@ -2494,8 +2492,8 @@ class TabManager: ObservableObject {
         guard !repoDirectoriesBySlug.isEmpty else { return [:] }
 
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = max(Self.workspacePullRequestProbeTimeout, 8)
-        configuration.timeoutIntervalForResource = max(Self.workspacePullRequestProbeTimeout, 8)
+        configuration.timeoutIntervalForRequest = 120
+        configuration.timeoutIntervalForResource = 120
         let session = URLSession(configuration: configuration)
         let authHeader = workspacePullRequestAuthHeaderValue()
         var results: [String: WorkspacePullRequestRepoFetchResult] = [:]
@@ -2505,15 +2503,18 @@ class TabManager: ObservableObject {
             returning: [(String, WorkspacePullRequestRepoFetchResult)].self
         ) { group in
             for repoSlug in repoDirectoriesBySlug.keys {
+                let branches = candidateBranchesByRepo[repoSlug] ?? []
+                let cachedEntry = cacheBySlug[repoSlug]
+                let useCached = allowCachedResults
+                    && (cachedEntry.map {
+                        now.timeIntervalSince($0.fetchedAt) < Self.workspacePullRequestRepoCacheLifetime
+                    } ?? false)
                 group.addTask {
-                    let result = await Self.workspacePullRequestRepoFetchResult(
+                    let result = await Self.workspacePullRequestRepoFetchResultViaGraphQL(
                         repoSlug: repoSlug,
-                        candidateBranches: candidateBranchesByRepo[repoSlug] ?? [],
-                        cachedEntry: cacheBySlug[repoSlug],
-                        useCachedRecentWindow: allowCachedResults
-                            && (cacheBySlug[repoSlug].map {
-                                now.timeIntervalSince($0.fetchedAt) < Self.workspacePullRequestRepoCacheLifetime
-                            } ?? false),
+                        candidateBranches: branches,
+                        cachedEntry: cachedEntry,
+                        useCachedRecentWindow: useCached,
                         session: session,
                         authHeader: authHeader
                     )
@@ -2577,14 +2578,18 @@ class TabManager: ObservableObject {
             let usedCachedRepoData: Bool
             if let matchedPullRequest,
                let status = pullRequestStatus(from: matchedPullRequest.state) {
+                let reviewStatusRaw = Self.mapReviewDecision(matchedPullRequest.reviewDecision)
+                    ?? candidate.priorReviewStatusRawValue
+                let ciStatusRaw = Self.mapCIStatusRollup(matchedPullRequest.ciStatusRollup)
+                    ?? candidate.priorCIStatusRawValue
                 resolution = .resolved(
                     WorkspacePullRequestResolvedItem(
                         number: matchedPullRequest.number,
                         urlString: matchedPullRequest.url,
                         statusRawValue: status.rawValue,
                         branch: candidate.branch,
-                        reviewStatusRawValue: nil,
-                        ciStatusRawValue: nil
+                        reviewStatusRawValue: reviewStatusRaw,
+                        ciStatusRawValue: ciStatusRaw
                     )
                 )
                 usedCachedRepoData = matchedPullRequestUsedCache
@@ -2603,6 +2608,238 @@ class TabManager: ObservableObject {
                 usedCachedRepoData: usedCachedRepoData
             )
         }
+    }
+
+    private nonisolated static func workspacePullRequestRepoFetchResultViaGraphQL(
+        repoSlug: String,
+        candidateBranches: Set<String>,
+        cachedEntry: WorkspacePullRequestRepoCacheEntry?,
+        useCachedRecentWindow: Bool,
+        session: URLSession,
+        authHeader: String?
+    ) async -> WorkspacePullRequestRepoFetchResult {
+        let normalizedCandidateBranches = Set(candidateBranches.compactMap(normalizedBranchName))
+
+        // Use cache if recent and all branches are resolved
+        if useCachedRecentWindow,
+           let cachedEntry {
+            let unresolvedBranches = unresolvedWorkspacePullRequestBranches(
+                normalizedCandidateBranches,
+                in: cachedEntry
+            )
+            if unresolvedBranches.isEmpty {
+#if DEBUG
+                dlog(
+                    "workspace.prRefresh.graphql.cache repo=\(repoSlug) " +
+                    "branches=\(cachedEntry.pullRequestsByBranch.count)"
+                )
+#endif
+                return .success(cachedEntry, usedCache: true, transientBranches: [])
+            }
+        }
+
+        // Look up all candidate branches via a single GraphQL query
+        let branchesToQuery = Array(normalizedCandidateBranches)
+        guard !branchesToQuery.isEmpty else {
+            let emptyEntry = WorkspacePullRequestRepoCacheEntry(
+                fetchedAt: Date(),
+                pullRequestsByBranch: [:],
+                knownAbsentBranches: normalizedCandidateBranches
+            )
+            return .success(emptyEntry, usedCache: false, transientBranches: [])
+        }
+
+        let components = repoSlug.split(separator: "/")
+        guard components.count == 2 else { return .transientFailure }
+        let owner = String(components[0])
+        let repo = String(components[1])
+
+        let query = buildGraphQLBranchPRQuery(owner: owner, repo: repo, branches: branchesToQuery)
+        let body: [String: Any] = ["query": query]
+        guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else {
+            return .transientFailure
+        }
+
+        guard let url = URL(string: "https://api.github.com/graphql") else {
+            return .transientFailure
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("cmux-workspace-pr-poller", forHTTPHeaderField: "User-Agent")
+        if let authHeader, !authHeader.isEmpty {
+            request.setValue(authHeader, forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = bodyData
+
+        guard let (data, response) = try? await session.data(for: request),
+              let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+#if DEBUG
+            dlog("workspace.prRefresh.graphql.fail repo=\(repoSlug)")
+#endif
+            return .transientFailure
+        }
+
+        guard let graphQLResponse = decodeJSON(GraphQLBranchPRResponse.self, from: data),
+              let repository = graphQLResponse.data?.repository else {
+#if DEBUG
+            dlog("workspace.prRefresh.graphql.decode.fail repo=\(repoSlug)")
+#endif
+            return .transientFailure
+        }
+
+        let fetchTimestamp = Date()
+        var pullRequestsByBranch: [String: GitHubPullRequestProbeItem] = [:]
+        var knownAbsentBranches: Set<String> = []
+
+        for (index, branch) in branchesToQuery.enumerated() {
+            let key = "branch_\(index)"
+            guard let connection = repository[key],
+                  let node = connection.nodes?.first else {
+                knownAbsentBranches.insert(branch)
+                continue
+            }
+
+            let rawState: String = {
+                switch node.state?.uppercased() {
+                case "OPEN": return "OPEN"
+                case "MERGED": return "MERGED"
+                case "CLOSED": return "CLOSED"
+                default: return node.state ?? "OPEN"
+                }
+            }()
+
+            let ciState = node.commits?.nodes?.first?.commit?.statusCheckRollup?.state
+
+            pullRequestsByBranch[branch] = GitHubPullRequestProbeItem(
+                number: node.number ?? 0,
+                state: rawState,
+                url: node.url ?? "",
+                updatedAt: nil,
+                headRefName: node.headRefName,
+                reviewDecision: node.reviewDecision,
+                ciStatusRollup: ciState
+            )
+        }
+
+        // Merge with cached data for branches we didn't query
+        if let cachedEntry {
+            for (branch, pr) in cachedEntry.pullRequestsByBranch where pullRequestsByBranch[branch] == nil {
+                pullRequestsByBranch[branch] = pr
+            }
+        }
+
+#if DEBUG
+        dlog(
+            "workspace.prRefresh.graphql.success repo=\(repoSlug) " +
+            "queried=\(branchesToQuery.count) found=\(pullRequestsByBranch.count) " +
+            "absent=\(knownAbsentBranches.count)"
+        )
+#endif
+
+        let cacheEntry = WorkspacePullRequestRepoCacheEntry(
+            fetchedAt: fetchTimestamp,
+            pullRequestsByBranch: pullRequestsByBranch,
+            knownAbsentBranches: knownAbsentBranches
+        )
+        return .success(cacheEntry, usedCache: false, transientBranches: [])
+    }
+
+    // MARK: - GraphQL branch PR query structures
+
+    private struct GraphQLBranchPRResponse: Decodable, Sendable {
+        let data: GraphQLBranchPRData?
+    }
+
+    private struct GraphQLBranchPRData: Decodable, Sendable {
+        let repository: [String: GraphQLBranchPRConnection]?
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: DynamicCodingKey.self)
+            guard let repoContainer = try? container.nestedContainer(
+                keyedBy: DynamicCodingKey.self,
+                forKey: DynamicCodingKey(stringValue: "repository")!
+            ) else {
+                repository = nil
+                return
+            }
+            var result: [String: GraphQLBranchPRConnection] = [:]
+            for key in repoContainer.allKeys {
+                if let connection = try? repoContainer.decode(GraphQLBranchPRConnection.self, forKey: key) {
+                    result[key.stringValue] = connection
+                }
+            }
+            repository = result
+        }
+    }
+
+    private struct GraphQLBranchPRConnection: Decodable, Sendable {
+        let nodes: [GraphQLBranchPRNode]?
+    }
+
+    private struct GraphQLBranchPRNode: Decodable, Sendable {
+        let number: Int?
+        let state: String?
+        let url: String?
+        let headRefName: String?
+        let reviewDecision: String?
+        let commits: GraphQLCommitConnection?
+    }
+
+    private nonisolated static func mapReviewDecision(_ reviewDecision: String?) -> String? {
+        switch reviewDecision?.uppercased() {
+        case "APPROVED": return SidebarPullRequestReviewStatus.approved.rawValue
+        case "CHANGES_REQUESTED": return SidebarPullRequestReviewStatus.changesRequested.rawValue
+        default: return nil
+        }
+    }
+
+    private nonisolated static func mapCIStatusRollup(_ state: String?) -> String? {
+        switch state?.uppercased() {
+        case "SUCCESS": return SidebarPullRequestCIStatus.passing.rawValue
+        case "FAILURE", "ERROR": return SidebarPullRequestCIStatus.failing.rawValue
+        case "PENDING", "EXPECTED": return SidebarPullRequestCIStatus.pending.rawValue
+        default: return nil
+        }
+    }
+
+    private nonisolated static func buildGraphQLBranchPRQuery(
+        owner: String,
+        repo: String,
+        branches: [String]
+    ) -> String {
+        let fragment = """
+        nodes {
+          number
+          state
+          url
+          headRefName
+          reviewDecision
+          commits(last: 1) {
+            nodes {
+              commit {
+                statusCheckRollup {
+                  state
+                }
+              }
+            }
+          }
+        }
+        """
+        let fields = branches.enumerated().map { (index, branch) in
+            let escapedBranch = branch.replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            return "branch_\(index): pullRequests(headRefName: \"\(escapedBranch)\", first: 1, states: [OPEN, MERGED, CLOSED], orderBy: {field: UPDATED_AT, direction: DESC}) { \(fragment) }"
+        }.joined(separator: "\n    ")
+        return """
+        query {
+          repository(owner: "\(owner)", name: "\(repo)") {
+            \(fields)
+          }
+        }
+        """
     }
 
     private nonisolated static func workspacePullRequestRepoFetchResult(
@@ -2967,7 +3204,7 @@ class TabManager: ObservableObject {
                     statusRawValue: item.statusRawValue,
                     branch: item.branch,
                     reviewStatusRawValue: enrichment?.reviewStatus?.rawValue ?? item.reviewStatusRawValue,
-                    ciStatusRawValue: enrichment?.ciStatus?.rawValue
+                    ciStatusRawValue: enrichment?.ciStatus?.rawValue ?? item.ciStatusRawValue
                 )
                 updatedResults[index] = WorkspacePullRequestRefreshResult(
                     workspaceId: results[index].workspaceId,
@@ -3993,7 +4230,9 @@ class TabManager: ObservableObject {
             url: currentPullRequest.url,
             status: nextStatus,
             branch: currentPullRequest.branch,
-            isStale: false
+            isStale: false,
+            reviewStatus: currentPullRequest.reviewStatus,
+            ciStatus: currentPullRequest.ciStatus
         )
     }
 
