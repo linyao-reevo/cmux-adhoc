@@ -13159,7 +13159,7 @@ private struct TabItemView: View, Equatable {
                                     .underline()
                                     .lineLimit(1)
                                     .truncationMode(.tail)
-                                Text(pullRequestStatusLabel(pullRequest.status))
+                                Text(pullRequestStatusLabel(pullRequest.status, reviewStatus: pullRequest.reviewStatus, ciStatus: pullRequest.ciStatus))
                                     .lineLimit(1)
                                 Spacer(minLength: 0)
                             }
@@ -13982,6 +13982,8 @@ private struct TabItemView: View, Equatable {
         let label: String
         let url: URL
         let status: SidebarPullRequestStatus
+        let reviewStatus: SidebarPullRequestReviewStatus?
+        let ciStatus: SidebarPullRequestCIStatus?
         let isStale: Bool
     }
 
@@ -13993,6 +13995,8 @@ private struct TabItemView: View, Equatable {
                 label: pullRequest.label,
                 url: pullRequest.url,
                 status: pullRequest.status,
+                reviewStatus: pullRequest.reviewStatus,
+                ciStatus: pullRequest.ciStatus,
                 isStale: pullRequest.isStale
             )
         }
@@ -14035,11 +14039,45 @@ private struct TabItemView: View, Equatable {
         NSWorkspace.shared.open(url)
     }
 
-    private func pullRequestStatusLabel(_ status: SidebarPullRequestStatus) -> String {
+    private func pullRequestReviewStatusLabel(_ reviewStatus: SidebarPullRequestReviewStatus) -> String {
+        switch reviewStatus {
+        case .approved:
+            return String(localized: "sidebar.pullRequest.reviewApproved", defaultValue: "approved")
+        case .changesRequested:
+            return String(localized: "sidebar.pullRequest.reviewChangesRequested", defaultValue: "changes requested")
+        }
+    }
+
+    private func pullRequestCIStatusLabel(_ ciStatus: SidebarPullRequestCIStatus) -> String {
+        switch ciStatus {
+        case .passing:
+            return String(localized: "sidebar.pullRequest.ciPassing", defaultValue: "passing")
+        case .failing:
+            return String(localized: "sidebar.pullRequest.ciFailing", defaultValue: "failing")
+        case .pending:
+            return String(localized: "sidebar.pullRequest.ciPending", defaultValue: "pending")
+        }
+    }
+
+    private func pullRequestStatusLabel(
+        _ status: SidebarPullRequestStatus,
+        reviewStatus: SidebarPullRequestReviewStatus?,
+        ciStatus: SidebarPullRequestCIStatus?
+    ) -> String {
         switch status {
-        case .open: return String(localized: "sidebar.pullRequest.statusOpen", defaultValue: "open")
-        case .merged: return String(localized: "sidebar.pullRequest.statusMerged", defaultValue: "merged")
-        case .closed: return String(localized: "sidebar.pullRequest.statusClosed", defaultValue: "closed")
+        case .open:
+            var parts = [String(localized: "sidebar.pullRequest.statusOpen", defaultValue: "open")]
+            if let reviewStatus {
+                parts.append(pullRequestReviewStatusLabel(reviewStatus))
+            }
+            if let ciStatus {
+                parts.append(pullRequestCIStatusLabel(ciStatus))
+            }
+            return parts.joined(separator: " \u{00B7} ")
+        case .merged:
+            return String(localized: "sidebar.pullRequest.statusMerged", defaultValue: "merged")
+        case .closed:
+            return String(localized: "sidebar.pullRequest.statusClosed", defaultValue: "closed")
         }
     }
 
