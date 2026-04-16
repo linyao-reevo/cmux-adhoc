@@ -780,8 +780,8 @@ _cmux_report_pr_for_path() {
         builtin cd "$repo_path" 2>/dev/null \
             && gh pr view "$branch" \
                 "${gh_repo_args[@]}" \
-                --json number,state,url \
-                --jq '[.number, .state, .url] | @tsv' \
+                --json number,state,url,reviewDecision,statusCheckRollup \
+                --jq '[.number, .state, .url, .reviewDecision, .statusCheckRollup] | @tsv' \
                 2>"$err_file"
     )"
     gh_status=$?
@@ -825,7 +825,7 @@ _cmux_report_pr_for_path() {
     fi
 
     local IFS=$'\t'
-    read -r number state url <<< "$gh_output"
+    read -r number state url review_decision ci_status <<< "$gh_output"
     if [[ -z "$number" ]] || [[ -z "$url" ]]; then
         return 1
     fi
@@ -837,18 +837,31 @@ _cmux_report_pr_for_path() {
         *) return 1 ;;
     esac
 
+    local review_opt=""
+    case "$review_decision" in
+        APPROVED) review_opt="--review=approved" ;;
+        CHANGES_REQUESTED) review_opt="--review=changes_requested" ;;
+    esac
+
+    local ci_opt=""
+    case "$ci_status" in
+        SUCCESS) ci_opt="--ci=passing" ;;
+        FAILURE|ERROR) ci_opt="--ci=failing" ;;
+        PENDING|EXPECTED) ci_opt="--ci=pending" ;;
+    esac
+
     if [[ -n "$prefix" ]]; then
         print -r -- "$branch" >| "$branch_file"
         print -r -- "$repo_path" >| "$repo_file"
         print -r -- "$now" >| "$timestamp_file"
-        printf '%s\t%s\t%s\t%s\n' "pr" "$number" "$state" "$url" >| "$result_file"
+        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "pr" "$number" "$state" "$url" "$review_decision" "$ci_status" >| "$result_file"
         /bin/rm -f -- "$no_pr_branch_file" >/dev/null 2>&1 || true
     fi
     _CMUX_PR_LAST_BRANCH="$branch"
     _CMUX_PR_NO_PR_BRANCH=""
 
     local quoted_branch="${branch//\"/\\\"}"
-    _cmux_send "report_pr $number $url $status_opt --branch=\"$quoted_branch\" --tab=$CMUX_TAB_ID --panel=$CMUX_PANEL_ID"
+    _cmux_send "report_pr $number $url $status_opt $review_opt $ci_opt --branch=\"$quoted_branch\" --tab=$CMUX_TAB_ID --panel=$CMUX_PANEL_ID"
 }
 
 _cmux_child_pids() {

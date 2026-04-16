@@ -759,6 +759,8 @@ class TabManager: ObservableObject {
         let urlString: String
         let statusRawValue: String
         let branch: String
+        let reviewStatusRawValue: String?
+        let ciStatusRawValue: String?
     }
 
     private struct WorkspacePullRequestRefreshResult: Sendable {
@@ -836,6 +838,60 @@ class TabManager: ObservableObject {
             case mergedAt = "merged_at"
             case head
         }
+    }
+
+    private struct GraphQLEnrichmentResponse: Decodable, Sendable {
+        let data: GraphQLEnrichmentData?
+    }
+
+    private struct GraphQLEnrichmentData: Decodable, Sendable {
+        let repository: [String: GraphQLPullRequestNode]?
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: DynamicCodingKey.self)
+            guard let repoContainer = try? container.nestedContainer(
+                keyedBy: DynamicCodingKey.self,
+                forKey: DynamicCodingKey(stringValue: "repository")!
+            ) else {
+                repository = nil
+                return
+            }
+            var result: [String: GraphQLPullRequestNode] = [:]
+            for key in repoContainer.allKeys {
+                if let node = try? repoContainer.decode(GraphQLPullRequestNode.self, forKey: key) {
+                    result[key.stringValue] = node
+                }
+            }
+            repository = result
+        }
+    }
+
+    private struct GraphQLPullRequestNode: Decodable, Sendable {
+        let reviewDecision: String?
+        let commits: GraphQLCommitConnection?
+    }
+
+    private struct GraphQLCommitConnection: Decodable, Sendable {
+        let nodes: [GraphQLCommitNode]?
+    }
+
+    private struct GraphQLCommitNode: Decodable, Sendable {
+        let commit: GraphQLCommit?
+    }
+
+    private struct GraphQLCommit: Decodable, Sendable {
+        let statusCheckRollup: GraphQLStatusCheckRollup?
+    }
+
+    private struct GraphQLStatusCheckRollup: Decodable, Sendable {
+        let state: String?
+    }
+
+    private struct DynamicCodingKey: CodingKey {
+        var stringValue: String
+        var intValue: Int?
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { self.stringValue = "\(intValue)"; self.intValue = intValue }
     }
 
     struct GitHubPullRequestProbeItem: Decodable, Equatable, Sendable {
@@ -1267,11 +1323,27 @@ class TabManager: ObservableObject {
                 now: now,
                 allowCachedResults: allowCachedResults
             )
-            let results = Self.resolveWorkspacePullRequestRefreshResults(
+            var results = Self.resolveWorkspacePullRequestRefreshResults(
                 candidates: candidates,
                 repoResults: repoResults
             )
             guard !Task.isCancelled else { return }
+
+            // Fetch review status for open PRs
+            let reviewConfiguration = URLSessionConfiguration.ephemeral
+            reviewConfiguration.timeoutIntervalForRequest = max(Self.workspacePullRequestProbeTimeout, 8)
+            reviewConfiguration.timeoutIntervalForResource = max(Self.workspacePullRequestProbeTimeout, 8)
+            let reviewSession = URLSession(configuration: reviewConfiguration)
+            let reviewAuthHeader = Self.workspacePullRequestAuthHeaderValue()
+
+            results = await Self.enrichResultsWithGraphQL(
+                results: results,
+                candidates: candidates,
+                session: reviewSession,
+                authHeader: reviewAuthHeader
+            )
+            guard !Task.isCancelled else { return }
+
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 guard !Task.isCancelled else { return }
@@ -1411,6 +1483,10 @@ class TabManager: ObservableObject {
                       let url = URL(string: resolvedPullRequest.urlString) else {
                     continue
                 }
+                let reviewStatus = resolvedPullRequest.reviewStatusRawValue
+                    .flatMap(SidebarPullRequestReviewStatus.init(rawValue:))
+                let ciStatus = resolvedPullRequest.ciStatusRawValue
+                    .flatMap(SidebarPullRequestCIStatus.init(rawValue:))
                 workspace.updatePanelPullRequest(
                     panelId: result.panelId,
                     number: resolvedPullRequest.number,
@@ -1418,7 +1494,9 @@ class TabManager: ObservableObject {
                     url: url,
                     status: status,
                     branch: resolvedPullRequest.branch,
-                    isStale: false
+                    isStale: false,
+                    reviewStatus: reviewStatus,
+                    ciStatus: ciStatus
                 )
             case .notFound:
                 workspacePullRequestTransientFailureCountByKey[key] = 0
@@ -2504,7 +2582,9 @@ class TabManager: ObservableObject {
                         number: matchedPullRequest.number,
                         urlString: matchedPullRequest.url,
                         statusRawValue: status.rawValue,
-                        branch: candidate.branch
+                        branch: candidate.branch,
+                        reviewStatusRawValue: nil,
+                        ciStatusRawValue: nil
                     )
                 )
                 usedCachedRepoData = matchedPullRequestUsedCache
@@ -2831,6 +2911,168 @@ class TabManager: ObservableObject {
         } catch {
             return nil
         }
+    }
+
+    private nonisolated static func enrichResultsWithGraphQL(
+        results: [WorkspacePullRequestRefreshResult],
+        candidates: [WorkspacePullRequestCandidate],
+        session: URLSession,
+        authHeader: String?
+    ) async -> [WorkspacePullRequestRefreshResult] {
+        // Group open PRs by repo slug
+        var prNumbersByRepo: [String: [(index: Int, item: WorkspacePullRequestResolvedItem)]] = [:]
+        for (index, result) in results.enumerated() {
+            guard case .resolved(let item) = result.resolution,
+                  item.statusRawValue == SidebarPullRequestStatus.open.rawValue else {
+                continue
+            }
+            let candidate = candidates[index]
+            guard let repoSlug = candidate.repoSlugs.first else { continue }
+            prNumbersByRepo[repoSlug, default: []].append((index: index, item: item))
+        }
+
+        guard !prNumbersByRepo.isEmpty else { return results }
+
+        let enrichments = await withTaskGroup(
+            of: (String, [Int: (reviewStatus: SidebarPullRequestReviewStatus?, ciStatus: SidebarPullRequestCIStatus?)]).self,
+            returning: [String: [Int: (reviewStatus: SidebarPullRequestReviewStatus?, ciStatus: SidebarPullRequestCIStatus?)]].self
+        ) { group in
+            for (repoSlug, entries) in prNumbersByRepo {
+                let prNumbers = entries.map(\.item.number)
+                group.addTask {
+                    let result = await fetchPullRequestEnrichmentViaGraphQL(
+                        repoSlug: repoSlug,
+                        prNumbers: prNumbers,
+                        session: session,
+                        authHeader: authHeader
+                    )
+                    return (repoSlug, result)
+                }
+            }
+            var collected: [String: [Int: (reviewStatus: SidebarPullRequestReviewStatus?, ciStatus: SidebarPullRequestCIStatus?)]] = [:]
+            for await (repoSlug, result) in group {
+                collected[repoSlug] = result
+            }
+            return collected
+        }
+
+        var updatedResults = results
+        for (repoSlug, entries) in prNumbersByRepo {
+            guard let repoEnrichments = enrichments[repoSlug] else { continue }
+            for (index, item) in entries {
+                let enrichment = repoEnrichments[item.number]
+                let enrichedItem = WorkspacePullRequestResolvedItem(
+                    number: item.number,
+                    urlString: item.urlString,
+                    statusRawValue: item.statusRawValue,
+                    branch: item.branch,
+                    reviewStatusRawValue: enrichment?.reviewStatus?.rawValue ?? item.reviewStatusRawValue,
+                    ciStatusRawValue: enrichment?.ciStatus?.rawValue
+                )
+                updatedResults[index] = WorkspacePullRequestRefreshResult(
+                    workspaceId: results[index].workspaceId,
+                    panelId: results[index].panelId,
+                    resolution: .resolved(enrichedItem),
+                    usedCachedRepoData: results[index].usedCachedRepoData
+                )
+            }
+        }
+        return updatedResults
+    }
+
+    private nonisolated static func buildPullRequestEnrichmentQuery(
+        owner: String,
+        repo: String,
+        prNumbers: [Int]
+    ) -> String {
+        let fragment = """
+        reviewDecision
+        commits(last: 1) {
+          nodes {
+            commit {
+              statusCheckRollup {
+                state
+              }
+            }
+          }
+        }
+        """
+        let fields = prNumbers.map { number in
+            "pr_\(number): pullRequest(number: \(number)) { \(fragment) }"
+        }.joined(separator: "\n    ")
+        return """
+        query {
+          repository(owner: "\(owner)", name: "\(repo)") {
+            \(fields)
+          }
+        }
+        """
+    }
+
+    private nonisolated static func fetchPullRequestEnrichmentViaGraphQL(
+        repoSlug: String,
+        prNumbers: [Int],
+        session: URLSession,
+        authHeader: String?
+    ) async -> [Int: (reviewStatus: SidebarPullRequestReviewStatus?, ciStatus: SidebarPullRequestCIStatus?)] {
+        guard !prNumbers.isEmpty else { return [:] }
+        let components = repoSlug.split(separator: "/")
+        guard components.count == 2 else { return [:] }
+        let owner = String(components[0])
+        let repo = String(components[1])
+
+        let query = buildPullRequestEnrichmentQuery(owner: owner, repo: repo, prNumbers: prNumbers)
+        let body: [String: Any] = ["query": query]
+        guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else { return [:] }
+
+        guard let url = URL(string: "https://api.github.com/graphql") else { return [:] }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("cmux-workspace-pr-poller", forHTTPHeaderField: "User-Agent")
+        if let authHeader, !authHeader.isEmpty {
+            request.setValue(authHeader, forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = bodyData
+
+        guard let (data, response) = try? await session.data(for: request),
+              let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            return [:]
+        }
+
+        guard let graphQLResponse = decodeJSON(GraphQLEnrichmentResponse.self, from: data),
+              let repository = graphQLResponse.data?.repository else {
+            return [:]
+        }
+
+        var results: [Int: (reviewStatus: SidebarPullRequestReviewStatus?, ciStatus: SidebarPullRequestCIStatus?)] = [:]
+        for prNumber in prNumbers {
+            let key = "pr_\(prNumber)"
+            guard let node = repository[key] else { continue }
+
+            let reviewStatus: SidebarPullRequestReviewStatus? = {
+                switch node.reviewDecision?.uppercased() {
+                case "APPROVED": return .approved
+                case "CHANGES_REQUESTED": return .changesRequested
+                default: return nil
+                }
+            }()
+
+            let ciStatus: SidebarPullRequestCIStatus? = {
+                let state = node.commits?.nodes?.first?.commit?.statusCheckRollup?.state?.uppercased()
+                switch state {
+                case "SUCCESS": return .passing
+                case "FAILURE", "ERROR": return .failing
+                case "PENDING", "EXPECTED": return .pending
+                default: return nil
+                }
+            }()
+
+            results[prNumber] = (reviewStatus: reviewStatus, ciStatus: ciStatus)
+        }
+        return results
     }
 
     private nonisolated static func workspacePullRequestAuthHeaderValue() -> String? {

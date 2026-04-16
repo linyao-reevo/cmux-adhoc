@@ -6041,6 +6041,17 @@ enum SidebarPullRequestStatus: String {
     case closed
 }
 
+enum SidebarPullRequestReviewStatus: String {
+    case approved
+    case changesRequested = "changes_requested"
+}
+
+enum SidebarPullRequestCIStatus: String {
+    case passing
+    case failing
+    case pending
+}
+
 private func normalizedSidebarBranchName(_ branch: String?) -> String? {
     guard let branch else { return nil }
     let trimmed = branch.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -6054,6 +6065,8 @@ struct SidebarPullRequestState: Equatable {
     let status: SidebarPullRequestStatus
     let branch: String?
     let isStale: Bool
+    let reviewStatus: SidebarPullRequestReviewStatus?
+    let ciStatus: SidebarPullRequestCIStatus?
 
     init(
         number: Int,
@@ -6061,7 +6074,9 @@ struct SidebarPullRequestState: Equatable {
         url: URL,
         status: SidebarPullRequestStatus,
         branch: String? = nil,
-        isStale: Bool = false
+        isStale: Bool = false,
+        reviewStatus: SidebarPullRequestReviewStatus? = nil,
+        ciStatus: SidebarPullRequestCIStatus? = nil
     ) {
         self.number = number
         self.label = label
@@ -6069,6 +6084,8 @@ struct SidebarPullRequestState: Equatable {
         self.status = status
         self.branch = normalizedSidebarBranchName(branch)
         self.isStale = isStale
+        self.reviewStatus = reviewStatus
+        self.ciStatus = ciStatus
     }
 }
 
@@ -7659,7 +7676,9 @@ final class Workspace: Identifiable, ObservableObject {
         url: URL,
         status: SidebarPullRequestStatus,
         branch: String? = nil,
-        isStale: Bool = false
+        isStale: Bool = false,
+        reviewStatus: SidebarPullRequestReviewStatus? = nil,
+        ciStatus: SidebarPullRequestCIStatus? = nil
     ) {
         let existing = panelPullRequests[panelId]
         let normalizedBranch = normalizedSidebarBranchName(branch)
@@ -7686,7 +7705,9 @@ final class Workspace: Identifiable, ObservableObject {
             url: url,
             status: status,
             branch: resolvedBranch,
-            isStale: isStale
+            isStale: isStale,
+            reviewStatus: reviewStatus,
+            ciStatus: ciStatus
         )
         if existing != state {
             panelPullRequests[panelId] = state
