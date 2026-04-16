@@ -10084,6 +10084,7 @@ private struct SidebarTabItemPresentationSnapshot: Equatable {
     let unreadCount: Int
     let latestNotificationText: String?
     let showsModifierShortcutHints: Bool
+    let shellActivityState: Workspace.PanelShellActivityState
 }
 
 struct VerticalTabsSidebar: View {
@@ -10192,7 +10193,8 @@ struct VerticalTabsSidebar: View {
                                     tabId: tab.id,
                                     unreadCount: liveUnreadCount,
                                     latestNotificationText: liveLatestNotificationText,
-                                    showsModifierShortcutHints: liveShowsModifierShortcutHints
+                                    showsModifierShortcutHints: liveShowsModifierShortcutHints,
+                                    shellActivityState: tab.aggregateShellActivityState()
                                 )
                                 let frozenPresentation = frozenTabItemPresentation?.tabId == tab.id
                                     ? frozenTabItemPresentation
@@ -13030,16 +13032,7 @@ private struct TabItemView: View, Equatable {
             remoteWorkspaceSection
 
             if detailVisibility.showsMetadata {
-                let metadataEntries = tab.sidebarStatusEntriesInDisplayOrder()
                 let metadataBlocks = tab.sidebarMetadataBlocksInDisplayOrder()
-                if !metadataEntries.isEmpty {
-                    SidebarMetadataRows(
-                        entries: metadataEntries,
-                        isActive: usesInvertedActiveForeground,
-                        onFocus: { updateSelection() }
-                    )
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-                }
                 if !metadataBlocks.isEmpty {
                     SidebarMetadataMarkdownBlocks(
                         blocks: metadataBlocks,
@@ -13237,6 +13230,15 @@ private struct TabItemView: View, Equatable {
                 #endif
                 tabManager.closeWorkspaceWithConfirmation(tab)
             }
+        }
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 3)
+                .fill(statusBarColor(for: livePresentation.shellActivityState))
+                .frame(width: 5)
+                .frame(maxHeight: .infinity)
+                .scaleEffect(y: 0.6)
+                .padding(.leading, 4)
+                .animation(.easeInOut(duration: 0.2), value: livePresentation.shellActivityState)
         }
         .overlay(alignment: .top) {
             if showsCenteredTopDropIndicator {
@@ -13666,6 +13668,19 @@ private struct TabItemView: View, Equatable {
             colorScheme: colorScheme,
             forceBright: activeTabIndicatorStyle == .leftRail
         ) ?? NSColor(hex: hex) ?? .gray
+    }
+
+    private func statusBarColor(for state: Workspace.PanelShellActivityState) -> Color {
+        switch state {
+        case .unknown:
+            return Color.white.opacity(0.15)
+        case .promptIdle:
+            return Color(red: 107/255, green: 114/255, blue: 128/255) // #6b7280
+        case .commandRunning:
+            return Color(red: 96/255, green: 165/255, blue: 250/255) // #60a5fa
+        case .awaitingInput:
+            return Color(red: 74/255, green: 222/255, blue: 128/255) // #4ade80
+        }
     }
 
     private var showsCenteredTopDropIndicator: Bool {
