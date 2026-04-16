@@ -6739,6 +6739,7 @@ final class Workspace: Identifiable, ObservableObject {
         case unknown
         case promptIdle
         case commandRunning
+        case awaitingInput
     }
 
     nonisolated static func resolveCloseConfirmation(
@@ -6748,7 +6749,7 @@ final class Workspace: Identifiable, ObservableObject {
         switch shellActivityState ?? .unknown {
         case .promptIdle:
             return false
-        case .commandRunning:
+        case .commandRunning, .awaitingInput:
             return true
         case .unknown:
             return fallbackNeedsConfirmClose

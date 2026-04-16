@@ -532,6 +532,8 @@ class TerminalController {
             return .commandRunning
         case "unknown", "clear":
             return .unknown
+        case "input", "awaiting", "waiting":
+            return .awaitingInput
         default:
             return nil
         }
@@ -11447,7 +11449,7 @@ class TerminalController {
           report_ports <port1> [port2...] [--tab=X] [--panel=Y] - Report listening ports
           report_tty <tty_name> [--tab=X] [--panel=Y] - Register TTY for batched port scanning
           ports_kick [--tab=X] [--panel=Y] [--reason=command|refresh] - Request batched port scan for panel
-          report_shell_state <prompt|running> [--tab=X] [--panel=Y] - Report whether the shell is idle at a prompt or running a command
+          report_shell_state <prompt|running|input> [--tab=X] [--panel=Y] - Report shell activity: prompt (idle), running (command executing), or input (agent awaiting user input)
           report_pr_action <merge|close|reopen|create|checkout|ready|edit|view> [--target=X] [--tab=X] [--panel=Y] - Hint that a PR-affecting command completed in the panel
           report_pwd <path> [--tab=X] [--panel=Y] - Report current working directory
           clear_ports [--tab=X] [--panel=Y] - Clear listening ports
