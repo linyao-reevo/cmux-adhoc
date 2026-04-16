@@ -6632,7 +6632,7 @@ final class Workspace: Identifiable, ObservableObject {
         return formatter
     }()
     nonisolated(unsafe) static var runSSHControlMasterCommandOverrideForTesting: (([String]) -> Void)?
-    private var panelShellActivityStates: [UUID: PanelShellActivityState] = [:]
+    @Published private var panelShellActivityStates: [UUID: PanelShellActivityState] = [:]
     /// PIDs associated with agent status entries (e.g. claude_code), keyed by status key.
     /// Used for stale-session detection: if the PID is dead, the status entry is cleared.
     var agentPIDs: [String: pid_t] = [:]
@@ -6674,6 +6674,7 @@ final class Workspace: Identifiable, ObservableObject {
             sidebarObservationSignal($metadataBlocks),
             sidebarObservationSignal($logEntries),
             sidebarObservationSignal($progress),
+            sidebarObservationSignal($panelShellActivityStates),
             sidebarObservationSignal($gitBranch),
             sidebarObservationSignal($panelGitBranches),
             sidebarObservationSignal($pullRequest),
@@ -6740,6 +6741,15 @@ final class Workspace: Identifiable, ObservableObject {
         case promptIdle
         case commandRunning
         case awaitingInput
+
+        var priority: Int {
+            switch self {
+            case .unknown: return 0
+            case .promptIdle: return 1
+            case .commandRunning: return 2
+            case .awaitingInput: return 3
+            }
+        }
     }
 
     nonisolated static func resolveCloseConfirmation(
@@ -7624,6 +7634,16 @@ final class Workspace: Identifiable, ObservableObject {
             "panel=\(panelId.uuidString.prefix(5)) from=\(previousState.rawValue) to=\(state.rawValue)"
         )
 #endif
+    }
+
+    func aggregateShellActivityState() -> PanelShellActivityState {
+        var highest = PanelShellActivityState.unknown
+        for state in panelShellActivityStates.values {
+            if state.priority > highest.priority {
+                highest = state
+            }
+        }
+        return highest
     }
 
     func panelNeedsConfirmClose(panelId: UUID, fallbackNeedsConfirmClose: Bool) -> Bool {
