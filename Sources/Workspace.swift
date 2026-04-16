@@ -7638,11 +7638,30 @@ final class Workspace: Identifiable, ObservableObject {
 
     func aggregateShellActivityState() -> PanelShellActivityState {
         var highest = PanelShellActivityState.unknown
+
+        // Check per-panel shell activity states (from shell integration hooks)
         for state in panelShellActivityStates.values {
             if state.priority > highest.priority {
                 highest = state
             }
         }
+
+        // Check agent status entries (from set_status socket commands, e.g. Claude Code hooks)
+        for entry in statusEntries.values {
+            let agentState: PanelShellActivityState
+            switch entry.value.lowercased() {
+            case "needs input":
+                agentState = .awaitingInput
+            case "running":
+                agentState = .commandRunning
+            default:
+                continue
+            }
+            if agentState.priority > highest.priority {
+                highest = agentState
+            }
+        }
+
         return highest
     }
 
