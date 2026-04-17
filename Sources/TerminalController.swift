@@ -2041,9 +2041,6 @@ class TerminalController {
             return v2Error(id: id, code: "invalid_request", message: "Missing method")
         }
 
-        v2MainSync { self.v2RefreshKnownRefs() }
-
-
         return withSocketCommandPolicy(commandKey: method, isV2: true) {
             switch method {
         case "system.ping":
@@ -3023,6 +3020,15 @@ class TerminalController {
     }
 
     private func v2ResolveHandleRef(_ handle: String) -> UUID? {
+        if let id = v2LookupHandleRef(handle) {
+            return id
+        }
+        // Ref not found — refresh all known refs and retry once.
+        v2RefreshKnownRefs()
+        return v2LookupHandleRef(handle)
+    }
+
+    private func v2LookupHandleRef(_ handle: String) -> UUID? {
         for kind in V2HandleKind.allCases {
             if let id = v2UUIDByRef[kind]?[handle] {
                 return id
