@@ -4223,6 +4223,70 @@ class TabManager: ObservableObject {
         )
     }
 
+    /// Merge a pull request via the GitHub REST API.
+    /// Returns true on success, false on failure.
+    /// The repo slug is parsed from the PR URL (https://github.com/owner/repo/pull/N).
+    func mergeWorkspacePullRequest(
+        workspaceId: UUID,
+        prNumber: Int,
+        prURL: URL
+    ) async -> Bool {
+        // Parse repo slug from PR URL: https://github.com/owner/repo/pull/N
+        let pathComponents = prURL.pathComponents
+        guard pathComponents.count >= 4,
+              pathComponents[3] == "pull" else {
+            return false
+        }
+        let repoSlug = "\(pathComponents[1])/\(pathComponents[2])"
+
+        let authHeader = Self.workspacePullRequestAuthHeaderValue()
+        guard let authHeader else { return false }
+
+        let endpoint = "repos/\(repoSlug)/pulls/\(prNumber)/merge"
+        guard let url = URL(string: "https://api.github.com/\(endpoint)") else {
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("cmux-workspace-pr-poller", forHTTPHeaderField: "User-Agent")
+        request.setValue(authHeader, forHTTPHeaderField: "Authorization")
+        request.httpBody = "{}".data(using: .utf8)
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 30
+        let session = URLSession(configuration: configuration)
+
+        do {
+            let (_, response) = try await session.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else { return false }
+            guard httpResponse.statusCode == 200 else { return false }
+        } catch {
+            return false
+        }
+
+        // Update local state to merged and schedule a refresh.
+        await MainActor.run { [weak self] in
+            guard let self,
+                  let workspace = self.tabs.first(where: { $0.id == workspaceId }) else { return }
+            self.reconcileLocalPullRequestActionIfPossible(
+                workspace: workspace,
+                panelId: workspace.focusedPanelId ?? UUID(),
+                action: "merge",
+                target: nil
+            )
+            self.scheduleWorkspacePullRequestRefresh(
+                workspaceId: workspaceId,
+                panelId: workspace.focusedPanelId ?? UUID(),
+                reason: "shipMerge"
+            )
+        }
+
+        return true
+    }
+
     private func reconcileLocalPullRequestActionIfPossible(
         workspace: Workspace,
         panelId: UUID,
