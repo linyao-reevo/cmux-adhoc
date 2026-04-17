@@ -19,7 +19,12 @@ private extension Color {
     }
 }
 
+private var coloredCircleImageCache: [NSColor: NSImage] = [:]
+
 private func coloredCircleImage(color: NSColor) -> NSImage {
+    if let cached = coloredCircleImageCache[color] {
+        return cached
+    }
     let size = NSSize(width: 14, height: 14)
     let image = NSImage(size: size, flipped: false) { rect in
         color.setFill()
@@ -27,6 +32,7 @@ private func coloredCircleImage(color: NSColor) -> NSImage {
         return true
     }
     image.isTemplate = false
+    coloredCircleImageCache[color] = image
     return image
 }
 
