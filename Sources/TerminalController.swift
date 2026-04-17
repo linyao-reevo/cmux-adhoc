@@ -14970,11 +14970,6 @@ class TerminalController {
                 return
             }
             tab.logEntries.append(SidebarLogEntry(message: message, level: level, source: source, timestamp: Date()))
-            let configuredLimit = UserDefaults.standard.object(forKey: "sidebarMaxLogEntries") as? Int ?? 50
-            let limit = max(1, min(500, configuredLimit))
-            if tab.logEntries.count > limit {
-                tab.logEntries.removeFirst(tab.logEntries.count - limit)
-            }
         }
         return result
     }
@@ -15014,11 +15009,12 @@ class TerminalController {
                 result = "No log entries"
                 return
             }
+            let allEntries = tab.logEntries.entries
             let entries: [SidebarLogEntry]
             if let limit {
-                entries = Array(tab.logEntries.suffix(limit))
+                entries = Array(allEntries.suffix(limit))
             } else {
-                entries = tab.logEntries
+                entries = allEntries
             }
             result = entries.map { entry in
                 var line = "[\(entry.level.rawValue)] \(entry.message)"
@@ -15675,7 +15671,7 @@ class TerminalController {
             }
 
             lines.append("log_count=\(tab.logEntries.count)")
-            for entry in tab.logEntries.suffix(5) {
+            for entry in tab.logEntries.entries.suffix(5) {
                 lines.append("  [\(entry.level.rawValue)] \(entry.message)")
             }
 

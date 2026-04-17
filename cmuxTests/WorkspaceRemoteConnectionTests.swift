@@ -1300,7 +1300,7 @@ final class WorkspaceRemoteConnectionTests: XCTestCase {
             workspace.statusEntries["remote.error"]?.value,
             "Remote proxy unavailable (cmux-macmini): \(proxyError)"
         )
-        XCTAssertEqual(workspace.logEntries.last?.source, "remote-proxy")
+        XCTAssertEqual(workspace.logEntries.entries.last?.source, "remote-proxy")
         XCTAssertEqual(workspace.remoteStatusPayload()["connected"] as? Bool, true)
         XCTAssertEqual(
             ((workspace.remoteStatusPayload()["proxy"] as? [String: Any])?["state"] as? String),

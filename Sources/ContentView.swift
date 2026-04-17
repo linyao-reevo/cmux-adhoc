@@ -13044,7 +13044,7 @@ private struct TabItemView: View, Equatable {
             }
 
             // Latest log entry
-            if detailVisibility.showsLog, let latestLog = tab.logEntries.last {
+            if detailVisibility.showsLog, let latestLog = tab.logEntries.entries.last {
                 HStack(spacing: 4) {
                     Image(systemName: logLevelIcon(latestLog.level))
                         .font(.system(size: 8))

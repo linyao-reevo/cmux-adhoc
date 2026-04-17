@@ -276,7 +276,7 @@ extension Workspace {
                     timestamp: entry.timestamp.timeIntervalSince1970
                 )
             }
-        let logSnapshots = logEntries.map { entry in
+        let logSnapshots = logEntries.entries.map { entry in
             SessionLogEntrySnapshot(
                 message: entry.message,
                 level: entry.level.rawValue,
@@ -347,13 +347,14 @@ extension Workspace {
         statusEntries.removeAll()
         agentPIDs.removeAll()
         agentListeningPorts.removeAll()
-        logEntries = snapshot.logEntries.map { entry in
-            SidebarLogEntry(
+        logEntries.removeAll()
+        for entry in snapshot.logEntries {
+            logEntries.append(SidebarLogEntry(
                 message: entry.message,
                 level: SidebarLogLevel(rawValue: entry.level) ?? .info,
                 source: entry.source,
                 timestamp: Date(timeIntervalSince1970: entry.timestamp)
-            )
+            ))
         }
         progress = snapshot.progress.map { SidebarProgressState(value: $0.value, label: $0.label) }
         gitBranch = snapshot.gitBranch.map { SidebarGitBranchState(branch: $0.branch, isDirty: $0.isDirty) }
@@ -5908,6 +5909,52 @@ struct SidebarLogEntry: Equatable {
     let timestamp: Date
 }
 
+/// Fixed-capacity ring buffer for sidebar log entries.
+/// Provides O(1) append and automatic eviction of oldest entries.
+struct SidebarLogRingBuffer: Equatable {
+    private var storage: [SidebarLogEntry]
+    private var head: Int = 0
+    private(set) var count: Int = 0
+    let capacity: Int
+
+    init(capacity: Int) {
+        self.capacity = max(1, capacity)
+        self.storage = []
+        self.storage.reserveCapacity(self.capacity)
+    }
+
+    mutating func append(_ entry: SidebarLogEntry) {
+        if storage.count < capacity {
+            storage.append(entry)
+            count = storage.count
+        } else {
+            storage[head] = entry
+            head = (head + 1) % capacity
+        }
+    }
+
+    mutating func removeAll() {
+        storage.removeAll(keepingCapacity: true)
+        head = 0
+        count = 0
+    }
+
+    /// Returns entries in chronological order (oldest first).
+    var entries: [SidebarLogEntry] {
+        guard count > 0 else { return [] }
+        if storage.count < capacity {
+            return storage
+        }
+        return Array(storage[head...]) + Array(storage[..<head])
+    }
+
+    var isEmpty: Bool { count == 0 }
+
+    static func == (lhs: SidebarLogRingBuffer, rhs: SidebarLogRingBuffer) -> Bool {
+        lhs.entries == rhs.entries
+    }
+}
+
 struct SidebarProgressState: Equatable {
     let value: Double
     let label: String?
@@ -6588,7 +6635,9 @@ final class Workspace: Identifiable, ObservableObject {
     nonisolated private static let manualUnreadClearDelayAfterFocusFlash: TimeInterval = 0.2
     @Published var statusEntries: [String: SidebarStatusEntry] = [:]
     @Published var metadataBlocks: [String: SidebarMetadataBlock] = [:]
-    @Published var logEntries: [SidebarLogEntry] = []
+    @Published var logEntries: SidebarLogRingBuffer = SidebarLogRingBuffer(
+        capacity: max(1, min(500, UserDefaults.standard.object(forKey: "sidebarMaxLogEntries") as? Int ?? 50))
+    )
     @Published var progress: SidebarProgressState?
     @Published var gitBranch: SidebarGitBranchState?
     @Published var panelGitBranches: [UUID: SidebarGitBranchState] = [:]
@@ -8700,11 +8749,6 @@ final class Workspace: Identifiable, ObservableObject {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         logEntries.append(SidebarLogEntry(message: trimmed, level: level, source: source, timestamp: Date()))
-        let configuredLimit = UserDefaults.standard.object(forKey: "sidebarMaxLogEntries") as? Int ?? 50
-        let limit = max(1, min(500, configuredLimit))
-        if logEntries.count > limit {
-            logEntries.removeFirst(logEntries.count - limit)
-        }
     }
 
     // MARK: - Panel Operations
