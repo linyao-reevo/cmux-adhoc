@@ -2248,6 +2248,10 @@ final class BrowserPanel: Panel, ObservableObject {
     private var loadingEndWorkItem: DispatchWorkItem?
     private var loadingGeneration: Int = 0
 
+    /// Whether this panel's workspace is currently the selected workspace.
+    /// When false, expensive background work (favicon refresh, search suggestions) is skipped.
+    var isWorkspaceActive: Bool = true
+
     private var faviconTask: Task<Void, Never>?
     private var faviconRefreshGeneration: Int = 0
     private var lastFaviconURLString: String?
@@ -3411,6 +3415,7 @@ final class BrowserPanel: Panel, ObservableObject {
         faviconTask?.cancel()
         faviconTask = nil
 
+        guard isWorkspaceActive else { return }
         guard let pageURL = webView.url else { return }
         guard let scheme = pageURL.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return }
         faviconRefreshGeneration &+= 1

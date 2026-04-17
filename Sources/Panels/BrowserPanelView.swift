@@ -2055,6 +2055,7 @@ struct BrowserPanelView: View {
         guard remoteSuggestionsEnabled else { return }
         guard !isSingleCharacterQuery else { return }
         guard omnibarInputIntent(for: query) != .urlLike else { return }
+        guard panel.isWorkspaceActive else { return }
 
         // Keep current remote rows visible while fetching fresh predictions.
         let engine = searchEngine

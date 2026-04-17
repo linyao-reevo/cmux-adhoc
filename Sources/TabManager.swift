@@ -1003,6 +1003,22 @@ class TabManager: ObservableObject {
             let generation = selectionSideEffectsGeneration
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.selectionSideEffectsGeneration == generation else { return }
+                // Throttle browser panels in deselected workspace
+                if let previousTabId, let previousWorkspace = self.tabs.first(where: { $0.id == previousTabId }) {
+                    for panel in previousWorkspace.panels.values {
+                        if let browser = panel as? BrowserPanel {
+                            browser.isWorkspaceActive = false
+                        }
+                    }
+                }
+                // Activate browser panels in selected workspace
+                if let selectedWorkspace = self.selectedWorkspace {
+                    for panel in selectedWorkspace.panels.values {
+                        if let browser = panel as? BrowserPanel {
+                            browser.isWorkspaceActive = true
+                        }
+                    }
+                }
                 self.focusSelectedTabPanel(previousTabId: previousTabId)
                 self.updateWindowTitleForSelectedTab()
                 if let selectedTabId = self.selectedTabId {
