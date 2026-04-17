@@ -6660,7 +6660,8 @@ final class Workspace: Identifiable, ObservableObject {
         return Publishers.MergeMany(publishers).eraseToAnyPublisher()
     }()
 
-    lazy var sidebarObservationPublisher: AnyPublisher<Void, Never> = {
+    /// Low-frequency structural changes (directory, branches, PRs, remote config).
+    lazy var sidebarContentPublisher: AnyPublisher<Void, Never> = {
         let publishers: [AnyPublisher<Void, Never>] = [
             sidebarObservationSignal($currentDirectory),
             $panels
@@ -6670,11 +6671,6 @@ final class Workspace: Identifiable, ObservableObject {
                 .map { _ in () }
                 .eraseToAnyPublisher(),
             sidebarObservationSignal($panelDirectories),
-            sidebarObservationSignal($statusEntries),
-            sidebarObservationSignal($metadataBlocks),
-            sidebarObservationSignal($logEntries),
-            sidebarObservationSignal($progress),
-            sidebarObservationSignal($panelShellActivityStates),
             sidebarObservationSignal($gitBranch),
             sidebarObservationSignal($panelGitBranches),
             sidebarObservationSignal($pullRequest),
@@ -6683,10 +6679,27 @@ final class Workspace: Identifiable, ObservableObject {
             sidebarObservationSignal($remoteConnectionState),
             sidebarObservationSignal($remoteConnectionDetail),
             sidebarObservationSignal($activeRemoteTerminalSessionCount),
+        ]
+        return Publishers.MergeMany(publishers).eraseToAnyPublisher()
+    }()
+
+    /// High-frequency activity updates (logs, status, progress, ports).
+    lazy var sidebarActivityPublisher: AnyPublisher<Void, Never> = {
+        let publishers: [AnyPublisher<Void, Never>] = [
+            sidebarObservationSignal($statusEntries),
+            sidebarObservationSignal($metadataBlocks),
+            sidebarObservationSignal($logEntries),
+            sidebarObservationSignal($progress),
+            sidebarObservationSignal($panelShellActivityStates),
             sidebarObservationSignal($listeningPorts),
         ]
-
         return Publishers.MergeMany(publishers).eraseToAnyPublisher()
+    }()
+
+    /// Combined publisher for backward compatibility. Merges content + activity.
+    lazy var sidebarObservationPublisher: AnyPublisher<Void, Never> = {
+        Publishers.Merge(sidebarContentPublisher, sidebarActivityPublisher)
+            .eraseToAnyPublisher()
     }()
 
     private static func isProxyOnlyRemoteError(_ detail: String) -> Bool {

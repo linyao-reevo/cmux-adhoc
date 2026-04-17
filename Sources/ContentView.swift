@@ -13266,18 +13266,32 @@ private struct TabItemView: View, Equatable {
             scheduleWorkspaceObservationInvalidation()
         }
         .onReceive(
-            tab.sidebarObservationPublisher
+            tab.sidebarContentPublisher
                 .receive(on: RunLoop.main)
-                // Prompt-time sidebar telemetry can arrive as a short burst
-                // (pwd, branch, PR, shell state). Coalesce that burst so the
-                // row redraws once with the settled state instead of blinking.
                 .debounce(for: Self.workspaceObservationCoalesceInterval, scheduler: RunLoop.main)
         ) { _ in
 #if DEBUG
             let description = tab.customDescription ?? ""
             dlog(
                 "sidebar.row.invalidate workspace=\(tab.id.uuidString.prefix(8)) " +
-                "source=debounced " +
+                "source=content " +
+                "title=\"\(debugCommandPaletteTextPreview(tab.title))\" " +
+                "descLen=\((description as NSString).length) " +
+                "desc=\"\(debugCommandPaletteTextPreview(description))\""
+            )
+#endif
+            scheduleWorkspaceObservationInvalidation()
+        }
+        .onReceive(
+            tab.sidebarActivityPublisher
+                .receive(on: RunLoop.main)
+                .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
+        ) { _ in
+#if DEBUG
+            let description = tab.customDescription ?? ""
+            dlog(
+                "sidebar.row.invalidate workspace=\(tab.id.uuidString.prefix(8)) " +
+                "source=activity " +
                 "title=\"\(debugCommandPaletteTextPreview(tab.title))\" " +
                 "descLen=\((description as NSString).length) " +
                 "desc=\"\(debugCommandPaletteTextPreview(description))\""
