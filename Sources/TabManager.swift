@@ -980,6 +980,7 @@ class TabManager: ObservableObject {
             sentryBreadcrumb("workspace.switch", data: [
                 "tabCount": tabs.count
             ])
+            PortScanner.shared.setActiveWorkspace(selectedTabId)
             let previousTabId = oldValue
             if let previousTabId,
                let previousPanelId = focusedPanelId(for: previousTabId) {

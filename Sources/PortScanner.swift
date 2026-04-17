@@ -35,6 +35,10 @@ final class PortScanner: @unchecked Sendable {
     /// Workspaces with active agent PID tracking that need background rescans.
     private var trackedAgentWorkspaces: Set<UUID> = []
 
+    /// The currently focused workspace. Burst scans are scoped to this workspace
+    /// to avoid scanning all TTYs when many tabs are open.
+    private var activeWorkspaceId: UUID?
+
     /// Panels that requested a scan since the last coalesce snapshot.
     private var pendingKicks: Set<PanelKey> = []
 
@@ -51,7 +55,7 @@ final class PortScanner: @unchecked Sendable {
     /// Each scan fires at this absolute offset; the recursive scheduler
     /// converts to relative delays between consecutive scans.
     private static let burstOffsets: [Double] = [0.5, 1.5, 3, 5, 7.5, 10]
-    private static let agentRescanInterval: TimeInterval = 2
+    private static let agentRescanInterval: TimeInterval = 5
 
     // MARK: - Public API
 
@@ -92,6 +96,12 @@ final class PortScanner: @unchecked Sendable {
     func refreshAgentPorts(workspaceId: UUID, agentPIDs: Set<Int>) {
         queue.async { [self] in
             refreshAgentPortsLocked(workspaceId: workspaceId, agentPIDs: agentPIDs)
+        }
+    }
+
+    func setActiveWorkspace(_ workspaceId: UUID?) {
+        queue.async { [self] in
+            activeWorkspaceId = workspaceId
         }
     }
 
@@ -143,9 +153,15 @@ final class PortScanner: @unchecked Sendable {
 
     private func runScan() {
         // Already on `queue`. Snapshot which panels to scan and their TTYs.
-        // We scan all registered panels, not just pending ones, since ports can
-        // appear/disappear on any panel.
-        let panelSnapshot = ttyNames
+        // Burst scans are scoped to the active workspace to avoid scanning
+        // all TTYs when many tabs are open.
+        let fullSnapshot = ttyNames
+        let panelSnapshot: [PanelKey: String]
+        if let activeWorkspaceId {
+            panelSnapshot = fullSnapshot.filter { $0.key.workspaceId == activeWorkspaceId }
+        } else {
+            panelSnapshot = fullSnapshot
+        }
 
         guard !panelSnapshot.isEmpty else {
             pendingKicks.removeAll()
