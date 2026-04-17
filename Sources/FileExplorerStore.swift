@@ -214,7 +214,9 @@ final class FileExplorerNode: Identifiable {
     let name: String
     let path: String
     let isDirectory: Bool
-    var children: [FileExplorerNode]?
+    var children: [FileExplorerNode]? {
+        didSet { _sortedChildren = nil }
+    }
     var isLoading: Bool = false
     var error: String?
 
@@ -227,11 +229,16 @@ final class FileExplorerNode: Identifiable {
 
     var isExpandable: Bool { isDirectory }
 
+    private var _sortedChildren: [FileExplorerNode]?
+
     var sortedChildren: [FileExplorerNode]? {
-        children?.sorted { a, b in
+        if let cached = _sortedChildren { return cached }
+        let sorted = children?.sorted { a, b in
             if a.isDirectory != b.isDirectory { return a.isDirectory }
             return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
         }
+        _sortedChildren = sorted
+        return sorted
     }
 }
 
