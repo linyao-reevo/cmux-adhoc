@@ -4247,25 +4247,43 @@ class TabManager: ObservableObject {
             return false
         }
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "PUT"
-        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("cmux-workspace-pr-poller", forHTTPHeaderField: "User-Agent")
-        request.setValue(authHeader, forHTTPHeaderField: "Authorization")
-        request.httpBody = "{}".data(using: .utf8)
-
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 30
         let session = URLSession(configuration: configuration)
 
-        do {
-            let (_, response) = try await session.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse else { return false }
-            guard httpResponse.statusCode == 200 else { return false }
-        } catch {
-            return false
+        // Try merge methods in order of preference. Repos may disallow some methods,
+        // returning 405. Fall through to the next method on 405.
+        let mergeMethods = ["squash", "merge", "rebase"]
+        var lastStatusCode = 0
+
+        for method in mergeMethods {
+            var request = URLRequest(url: url)
+            request.httpMethod = "PUT"
+            request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue("cmux-workspace-pr-poller", forHTTPHeaderField: "User-Agent")
+            request.setValue(authHeader, forHTTPHeaderField: "Authorization")
+            request.httpBody = "{\"merge_method\":\"\(method)\"}".data(using: .utf8)
+
+            do {
+                let (_, response) = try await session.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse else { continue }
+                lastStatusCode = httpResponse.statusCode
+                if lastStatusCode == 200 {
+                    break
+                }
+                // 405 = method not allowed for this repo, try next method
+                if lastStatusCode == 405 {
+                    continue
+                }
+                // Any other error (409 conflict, 403 forbidden, etc.) — stop trying
+                break
+            } catch {
+                return false
+            }
         }
+
+        guard lastStatusCode == 200 else { return false }
 
         // Update local state to merged and schedule a refresh.
         await MainActor.run { [weak self] in

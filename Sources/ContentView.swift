@@ -12684,6 +12684,8 @@ private struct TabItemView: View, Equatable {
     @StateObject private var contextMenuState = SidebarTabItemContextMenuState()
     @State private var isHovering = false
     @State private var rowHeight: CGFloat = 1
+    @State private var mergingPRIds: Set<String> = []
+    @State private var failedPRIds: Set<String> = []
 
     var isMultiSelected: Bool {
         selectedTabIds.contains(tab.id)
@@ -12933,14 +12935,7 @@ private struct TabItemView: View, Equatable {
             }
             return gitBranchSummaryText(orderedPanelIds: orderedPanelIds)
         }()
-        let compactDirectorySummaryText: String? = {
-            guard detailVisibility.showsBranchDirectory,
-                  !sidebarBranchVerticalLayout,
-                  let orderedPanelIds else {
-                return nil
-            }
-            return directorySummaryText(orderedPanelIds: orderedPanelIds)
-        }()
+        let compactDirectorySummaryText: String? = nil
         let compactBranchDirectoryRow = branchDirectoryRow(
             gitSummary: compactGitBranchSummaryText,
             directorySummary: compactDirectorySummaryText
@@ -13146,28 +13141,84 @@ private struct TabItemView: View, Equatable {
             if detailVisibility.showsPullRequests, !pullRequestRows.isEmpty {
                 VStack(alignment: .leading, spacing: 1) {
                     ForEach(pullRequestRows) { pullRequest in
-                        Button(action: {
-                            openPullRequestLink(pullRequest.url)
-                        }) {
-                            HStack(spacing: 4) {
-                                PullRequestStatusIcon(
-                                    status: pullRequest.status,
-                                    color: pullRequestForegroundColor
-                                )
-                                Text("\(pullRequest.label) #\(pullRequest.number)")
-                                    .underline()
-                                    .lineLimit(1)
-                                    .truncationMode(.tail)
-                                Text(pullRequestStatusLabel(pullRequest.status, reviewStatus: pullRequest.reviewStatus, ciStatus: pullRequest.ciStatus))
-                                    .lineLimit(1)
-                                Spacer(minLength: 0)
+                        HStack(spacing: 4) {
+                            Button(action: {
+                                openPullRequestLink(pullRequest.url)
+                            }) {
+                                HStack(spacing: 4) {
+                                    PullRequestStatusIcon(
+                                        status: pullRequest.status,
+                                        color: pullRequestForegroundColor
+                                    )
+                                    Text("\(pullRequest.label) #\(pullRequest.number)")
+                                        .underline()
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                    Text(pullRequestStatusLabel(pullRequest.status, reviewStatus: pullRequest.reviewStatus, ciStatus: pullRequest.ciStatus))
+                                        .lineLimit(1)
+                                }
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(pullRequestForegroundColor)
+                                .opacity(pullRequest.isStale ? 0.5 : 1)
                             }
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(pullRequestForegroundColor)
-                            .opacity(pullRequest.isStale ? 0.5 : 1)
+                            .buttonStyle(.plain)
+                            .safeHelp(String(localized: "sidebar.pullRequest.openTooltip", defaultValue: "Open \(pullRequest.label) #\(pullRequest.number)"))
+                            Spacer(minLength: 0)
+                            if pullRequest.isMergeable, !mergingPRIds.contains(pullRequest.id) {
+                                if failedPRIds.contains(pullRequest.id) {
+                                    Text(String(localized: "sidebar.pullRequest.mergeFailed", defaultValue: "Failed"))
+                                        .font(.system(size: 9, weight: .semibold))
+                                        .foregroundColor(.red)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .stroke(Color.red, lineWidth: 1)
+                                        )
+                                } else {
+                                    Button(action: {
+                                        mergingPRIds.insert(pullRequest.id)
+                                        Task {
+                                            let success = await tabManager.mergeWorkspacePullRequest(
+                                                workspaceId: tab.id,
+                                                prNumber: pullRequest.number,
+                                                prURL: pullRequest.url
+                                            )
+                                            await MainActor.run {
+                                                mergingPRIds.remove(pullRequest.id)
+                                                if !success {
+                                                    failedPRIds.insert(pullRequest.id)
+                                                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                                                        failedPRIds.remove(pullRequest.id)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }) {
+                                        HStack(spacing: 2) {
+                                            Text("\u{1F6A2}")
+                                                .font(.system(size: 9))
+                                            Text(String(localized: "sidebar.pullRequest.shipButton", defaultValue: "Ship"))
+                                                .font(.system(size: 9, weight: .semibold))
+                                        }
+                                        .foregroundColor(.green)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .stroke(Color.green, lineWidth: 1)
+                                        )
+                                        .contentShape(RoundedRectangle(cornerRadius: 8))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .safeHelp(String(localized: "sidebar.pullRequest.mergeTooltip", defaultValue: "Merge pull request"))
+                                }
+                            } else if mergingPRIds.contains(pullRequest.id) {
+                                ProgressView()
+                                    .controlSize(.mini)
+                                    .padding(.horizontal, 6)
+                            }
                         }
-                        .buttonStyle(.plain)
-                        .safeHelp(String(localized: "sidebar.pullRequest.openTooltip", defaultValue: "Open \(pullRequest.label) #\(pullRequest.number)"))
                     }
                 }
             }
@@ -13983,22 +14034,8 @@ private struct TabItemView: View, Equatable {
                 return "\(branch)\(entry.isDirty ? "*" : "")"
             }()
 
-            let directoryText: String? = {
-                guard let directory = entry.directory else { return nil }
-                let shortened = SidebarPathFormatter.shortenedPath(directory, homeDirectoryPath: home)
-                return shortened.isEmpty ? nil : shortened
-            }()
-
-            switch (branchText, directoryText) {
-            case let (branch?, directory?):
-                return VerticalBranchDirectoryLine(branch: branch, directory: directory)
-            case let (branch?, nil):
-                return VerticalBranchDirectoryLine(branch: branch, directory: nil)
-            case let (nil, directory?):
-                return VerticalBranchDirectoryLine(branch: nil, directory: directory)
-            default:
-                return nil
-            }
+            guard branchText != nil else { return nil }
+            return VerticalBranchDirectoryLine(branch: branchText, directory: nil)
         }
     }
 
@@ -14020,6 +14057,10 @@ private struct TabItemView: View, Equatable {
         let reviewStatus: SidebarPullRequestReviewStatus?
         let ciStatus: SidebarPullRequestCIStatus?
         let isStale: Bool
+
+        var isMergeable: Bool {
+            status == .open && reviewStatus == .approved && ciStatus == .passing && !isStale
+        }
     }
 
     private func pullRequestDisplays(orderedPanelIds: [UUID]) -> [PullRequestDisplay] {
