@@ -937,7 +937,7 @@ class TabManager: ObservableObject {
     /// Static so port ranges don't overlap across multiple windows (each window has its own TabManager).
     private static var nextPortOrdinal: Int = 0
     private nonisolated static let initialWorkspaceGitProbeDelays: [TimeInterval] = [0, 0.5, 1.5, 3.0, 6.0, 10.0]
-    private nonisolated static let backgroundPollInterval: TimeInterval = 30
+    private nonisolated static let backgroundPollInterval: TimeInterval = 60
     private nonisolated static let selectedPollInterval: TimeInterval = 10
     private nonisolated static let workspacePullRequestPollTickInterval: TimeInterval = 15
     private nonisolated static let workspacePullRequestRepoCacheLifetime: TimeInterval = 15
@@ -1041,6 +1041,9 @@ class TabManager: ObservableObject {
     private var workspacePullRequestLastTerminalStateRefreshAtByKey: [WorkspaceGitProbeKey: Date] = [:]
     private var workspacePullRequestTransientFailureCountByKey: [WorkspaceGitProbeKey: Int] = [:]
     private var workspacePullRequestRepoCacheBySlug: [String: WorkspacePullRequestRepoCacheEntry] = [:]
+    /// Tracks the last directory seen per workspace during background git polls.
+    /// Workspaces whose directory hasn't changed are skipped to avoid redundant probes.
+    private var lastPolledDirectoryByWorkspaceId: [UUID: String] = [:]
     private var workspacePullRequestPollTimer: DispatchSourceTimer?
     private var workspacePullRequestRefreshTask: Task<Void, Never>?
     private var workspacePullRequestFollowUpShouldBypassRepoCache = false
@@ -1216,6 +1219,14 @@ class TabManager: ObservableObject {
         let activeProbeKeys = activeWorkspaceGitProbeKeys
 
         for workspace in tabs {
+            // Skip workspaces whose directory hasn't changed since the last poll.
+            let currentDir = workspace.currentDirectory
+            if let lastDir = lastPolledDirectoryByWorkspaceId[workspace.id],
+               lastDir == currentDir {
+                continue
+            }
+            lastPolledDirectoryByWorkspaceId[workspace.id] = currentDir
+
             for panelId in trackedWorkspaceGitMetadataPollCandidatePanelIds(
                 in: workspace,
                 activeProbeKeys: activeProbeKeys
@@ -2301,6 +2312,7 @@ class TabManager: ObservableObject {
         workspaceGitTrackedDirectoryByKey = workspaceGitTrackedDirectoryByKey.filter { key, _ in
             key.workspaceId != workspaceId
         }
+        lastPolledDirectoryByWorkspaceId.removeValue(forKey: workspaceId)
         clearWorkspacePullRequestTracking(workspaceId: workspaceId)
     }
 
