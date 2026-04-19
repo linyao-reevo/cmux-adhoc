@@ -345,8 +345,20 @@ struct WorkspaceContentView: View {
             syncBonsplitNotificationBadges()
             refreshGhosttyAppearanceConfig(reason: "onAppear")
         }
-        .onChange(of: notificationStore.notifications) { _, _ in
-            syncBonsplitNotificationBadges()
+        .onChange(of: notificationStore.notifications) { oldValue, newValue in
+            // Diff old/new to find which panel IDs changed, then update only those.
+            let oldPanelIds = Set(oldValue.compactMap(\.surfaceId))
+            let newPanelIds = Set(newValue.compactMap(\.surfaceId))
+            let changedPanelIds = oldPanelIds.symmetricDifference(newPanelIds)
+
+            if changedPanelIds.isEmpty || changedPanelIds.count > 5 {
+                // No specific diff available or too many changes — fall back to full sweep.
+                syncBonsplitNotificationBadges()
+            } else {
+                for panelId in changedPanelIds {
+                    syncBonsplitNotificationBadge(forPanelId: panelId)
+                }
+            }
         }
         .onChange(of: workspace.manualUnreadPanelIds) { _, _ in
             syncBonsplitNotificationBadges()
@@ -411,6 +423,36 @@ struct WorkspaceContentView: View {
                         isPinned: expectedPinned
                     )
                 }
+            }
+        }
+    }
+
+    /// Update bonsplit notification badge for a single panel.
+    /// O(1) per panel vs O(all panes × all tabs) for the full sweep.
+    private func syncBonsplitNotificationBadge(forPanelId panelId: UUID) {
+        let manualUnread = workspace.manualUnreadPanelIds
+        let shouldShow = notificationStore.hasVisibleNotificationIndicator(
+            forTabId: workspace.id, surfaceId: panelId
+        ) || manualUnread.contains(panelId)
+
+        for paneId in workspace.bonsplitController.allPaneIds {
+            for tab in workspace.bonsplitController.tabs(inPane: paneId) {
+                guard workspace.panelIdFromSurfaceId(tab.id) == panelId else { continue }
+                let expectedKind = workspace.panelKind(panelId: panelId)
+                let expectedPinned = workspace.isPanelPinned(panelId)
+                let kindUpdate: String?? = expectedKind.map { .some($0) }
+
+                if tab.showsNotificationBadge != shouldShow ||
+                    tab.isPinned != expectedPinned ||
+                    (expectedKind != nil && tab.kind != expectedKind) {
+                    workspace.bonsplitController.updateTab(
+                        tab.id,
+                        kind: kindUpdate,
+                        showsNotificationBadge: shouldShow,
+                        isPinned: expectedPinned
+                    )
+                }
+                return  // Found the tab, done.
             }
         }
     }
