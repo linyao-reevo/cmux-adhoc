@@ -466,6 +466,56 @@ class TerminalController {
                 return true
             }
         }
+
+        // MARK: - Shell Activity Coalescing
+
+        private var pendingShellActivityUpdates: [SocketSurfaceKey: Workspace.PanelShellActivityState] = [:]
+        private var shellActivityFlushScheduled = false
+        private static let shellActivityFlushDelay: TimeInterval = 0.05  // 50ms
+
+        /// Enqueue a shell activity update for coalesced delivery to the main thread.
+        /// Multiple updates for the same surface within the flush window are last-write-wins.
+        func enqueueShellActivityUpdate(
+            workspaceId: UUID,
+            panelId: UUID,
+            state: Workspace.PanelShellActivityState
+        ) {
+            let key = SocketSurfaceKey(workspaceId: workspaceId, panelId: panelId)
+            queue.async { [self] in
+                guard lastReportedShellStates[key] != state else { return }
+                if lastReportedShellStates.count >= maxTrackedShellStates {
+                    lastReportedShellStates.removeAll(keepingCapacity: true)
+                }
+                lastReportedShellStates[key] = state
+                pendingShellActivityUpdates[key] = state
+                guard !shellActivityFlushScheduled else { return }
+                shellActivityFlushScheduled = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.shellActivityFlushDelay) { [self] in
+                    self.flushShellActivityUpdates()
+                }
+            }
+        }
+
+        private func flushShellActivityUpdates() {
+            var updates: [SocketSurfaceKey: Workspace.PanelShellActivityState] = [:]
+            queue.sync {
+                updates = pendingShellActivityUpdates
+                pendingShellActivityUpdates.removeAll(keepingCapacity: true)
+                shellActivityFlushScheduled = false
+            }
+            guard !updates.isEmpty else { return }
+#if DEBUG
+            if updates.count > 1 {
+                dlog("shellActivity.coalesce flushed=\(updates.count) updates")
+            }
+#endif
+            MainActor.assumeIsolated {
+                for (key, state) in updates {
+                    guard let tabManager = AppDelegate.shared?.tabManagerFor(tabId: key.workspaceId) else { continue }
+                    tabManager.updateSurfaceShellActivity(tabId: key.workspaceId, surfaceId: key.panelId, state: state)
+                }
+            }
+        }
     }
 
     private static let socketFastPathState = SocketFastPathState()
@@ -15360,17 +15410,11 @@ class TerminalController {
         }
 
         if let scope = Self.explicitSocketScope(options: parsed.options) {
-            guard Self.socketFastPathState.shouldPublishShellActivity(
+            Self.socketFastPathState.enqueueShellActivityUpdate(
                 workspaceId: scope.workspaceId,
                 panelId: scope.panelId,
                 state: state
-            ) else {
-                return "OK"
-            }
-            DispatchQueue.main.async {
-                guard let tabManager = AppDelegate.shared?.tabManagerFor(tabId: scope.workspaceId) else { return }
-                tabManager.updateSurfaceShellActivity(tabId: scope.workspaceId, surfaceId: scope.panelId, state: state)
-            }
+            )
             return "OK"
         }
 
