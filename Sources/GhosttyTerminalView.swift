@@ -6577,6 +6577,10 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         return false
     }
 
+    /// Coalesces notification dismissal during rapid typing.
+    /// Reset on each keystroke; fires 100ms after the last key.
+    private var notificationDismissWorkItem: DispatchWorkItem?
+
     override func keyDown(with event: NSEvent) {
 #if DEBUG
         let typingTimingStart = CmuxTypingTiming.start()
@@ -6626,10 +6630,20 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
 #if DEBUG
             let dismissNotificationStart = ProcessInfo.processInfo.systemUptime
 #endif
-            AppDelegate.shared?.tabManager?.dismissNotificationOnDirectInteraction(
-                tabId: terminalSurface.tabId,
-                surfaceId: terminalSurface.id
-            )
+            // Coalesce rapid-typing notification dismissals into one call per burst.
+            // The work item resets on each keystroke and fires 100ms after the last key.
+            notificationDismissWorkItem?.cancel()
+            let tabId = terminalSurface.tabId
+            let surfaceId = terminalSurface.id
+            let item = DispatchWorkItem { [weak self] in
+                guard self != nil else { return }
+                AppDelegate.shared?.tabManager?.dismissNotificationOnDirectInteraction(
+                    tabId: tabId,
+                    surfaceId: surfaceId
+                )
+            }
+            notificationDismissWorkItem = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: item)
 #if DEBUG
             dismissNotificationMs = (ProcessInfo.processInfo.systemUptime - dismissNotificationStart) * 1000.0
 #endif
