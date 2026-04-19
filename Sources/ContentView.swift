@@ -13344,6 +13344,18 @@ private struct TabItemView: View, Equatable {
                 .receive(on: RunLoop.main)
                 .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
         ) { _ in
+            // Skip sidebar re-render for the active workspace while the user is typing.
+            // The 500ms debounce + 300ms typing guard ensure the sidebar catches up
+            // after the typing burst ends.
+            if tab.isTypingActive && isActive {
+#if DEBUG
+                dlog(
+                    "sidebar.row.invalidate.SKIPPED workspace=\(tab.id.uuidString.prefix(8)) " +
+                    "source=activity reason=typingActive"
+                )
+#endif
+                return
+            }
 #if DEBUG
             let description = tab.customDescription ?? ""
             dlog(
