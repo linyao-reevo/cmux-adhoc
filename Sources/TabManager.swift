@@ -5179,7 +5179,11 @@ class TabManager: ObservableObject {
         notificationStore.clearFocusedReadIndicator(forTabId: tabId, surfaceId: surfaceId)
         if let panelId = surfaceId,
            let tab = tabs.first(where: { $0.id == tabId }) {
-            tab.triggerNotificationDismissFlash(panelId: panelId)
+            // Skip the visual flash animation during active typing — the user
+            // is already interacting with the panel, so the flash is redundant.
+            if !tab.isTypingActive {
+                tab.triggerNotificationDismissFlash(panelId: panelId)
+            }
         }
         return true
     }
