@@ -6560,6 +6560,36 @@ final class Workspace: Identifiable, ObservableObject {
     @Published var currentDirectory: String
     private(set) var preferredBrowserProfileID: UUID?
 
+    // MARK: - Typing Guard
+
+    /// True while the user is actively typing in this workspace's focused terminal.
+    /// NOT @Published — must not trigger Combine propagation. Read as a plain Bool
+    /// guard by TabItemView and TabManager to skip redundant work during typing bursts.
+    private(set) var isTypingActive: Bool = false
+    private var typingResetWorkItem: DispatchWorkItem?
+
+    /// Call from the keystroke hot path. Sets the typing guard and schedules
+    /// auto-reset 300ms after the last keystroke.
+    func markTypingActive() {
+        let wasActive = isTypingActive
+        isTypingActive = true
+        typingResetWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.isTypingActive = false
+#if DEBUG
+            dlog("typing.guard workspace=\(self.id.uuidString.prefix(5)) deactivated")
+#endif
+        }
+        typingResetWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: item)
+#if DEBUG
+        if !wasActive {
+            dlog("typing.guard workspace=\(id.uuidString.prefix(5)) activated")
+        }
+#endif
+    }
+
     /// Ordinal for CMUX_PORT range assignment (monotonically increasing per app session)
     var portOrdinal: Int = 0
 

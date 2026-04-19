@@ -6622,6 +6622,7 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         ensureSurfaceMs = (ProcessInfo.processInfo.systemUptime - ensureSurfaceStart) * 1000.0
 #endif
         if let terminalSurface {
+            AppDelegate.shared?.tabManager?.markTypingActiveForSelectedTab(tabId: terminalSurface.tabId)
 #if DEBUG
             let dismissNotificationStart = ProcessInfo.processInfo.systemUptime
 #endif

@@ -5184,6 +5184,14 @@ class TabManager: ObservableObject {
         return true
     }
 
+    /// Marks the workspace for the given tab as typing-active.
+    /// Called from the keystroke hot path — must be O(1).
+    func markTypingActiveForSelectedTab(tabId: UUID) {
+        guard selectedTabId == tabId,
+              let tab = selectedTab else { return }
+        tab.markTypingActive()
+    }
+
     private func enqueuePanelTitleUpdate(tabId: UUID, panelId: UUID, title: String) {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
