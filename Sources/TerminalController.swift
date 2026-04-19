@@ -449,23 +449,7 @@ class TerminalController {
             }
         }
 
-        func shouldPublishShellActivity(
-            workspaceId: UUID,
-            panelId: UUID,
-            state: Workspace.PanelShellActivityState
-        ) -> Bool {
-            let key = SocketSurfaceKey(workspaceId: workspaceId, panelId: panelId)
-            return queue.sync {
-                if lastReportedShellStates[key] == state {
-                    return false
-                }
-                if lastReportedShellStates.count >= maxTrackedShellStates {
-                    lastReportedShellStates.removeAll(keepingCapacity: true)
-                }
-                lastReportedShellStates[key] = state
-                return true
-            }
-        }
+
 
         // MARK: - Shell Activity Coalescing
 
@@ -509,6 +493,10 @@ class TerminalController {
                 dlog("shellActivity.coalesce flushed=\(updates.count) updates")
             }
 #endif
+            // Guaranteed main thread (dispatched via DispatchQueue.main.asyncAfter).
+            // MainActor.assumeIsolated is required because SocketFastPathState is
+            // @unchecked Sendable and the compiler cannot statically verify the
+            // main-thread context from GCD dispatch.
             MainActor.assumeIsolated {
                 for (key, state) in updates {
                     guard let tabManager = AppDelegate.shared?.tabManagerFor(tabId: key.workspaceId) else { continue }
