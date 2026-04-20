@@ -3784,6 +3784,85 @@ class TabManager: ObservableObject {
         addWorkspace(select: select, eagerLoadTerminal: eagerLoadTerminal)
     }
 
+    /// Creates a git worktree via `git gtr new <name>`, resolves its path via
+    /// `git gtr go <name>`, then opens a new workspace rooted at that path.
+    /// On failure, shows an alert and falls back to a regular new workspace.
+    @discardableResult
+    func addWorktreeWorkspace(name: String) -> Workspace {
+        let cwd: String? = selectedWorkspace?.currentDirectory
+        let fallbackCwd = cwd ?? FileManager.default.currentDirectoryPath
+
+        // Step 1: git gtr new <name>
+        let createResult = runGitGtr(arguments: ["new", name], cwd: fallbackCwd)
+        if let error = createResult.error {
+            showWorktreeError(
+                title: String(localized: "worktree.error.createTitle", defaultValue: "Failed to create worktree"),
+                message: error
+            )
+            return addWorkspace()
+        }
+
+        // Step 2: git gtr go <name> to get the path
+        let goResult = runGitGtr(arguments: ["go", name], cwd: fallbackCwd)
+        guard let worktreePath = goResult.output, !worktreePath.isEmpty else {
+            showWorktreeError(
+                title: String(localized: "worktree.error.resolvePath", defaultValue: "Failed to resolve worktree path"),
+                message: goResult.error ?? String(localized: "worktree.error.emptyPath", defaultValue: "git gtr go returned an empty path")
+            )
+            return addWorkspace()
+        }
+
+        return addWorkspace(
+            title: name,
+            workingDirectory: worktreePath
+        )
+    }
+
+    private struct GitGtrResult {
+        let output: String?
+        let error: String?
+    }
+
+    private func runGitGtr(arguments: [String], cwd: String) -> GitGtrResult {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["git", "gtr"] + arguments
+        process.currentDirectoryURL = URL(fileURLWithPath: cwd)
+
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return GitGtrResult(output: nil, error: error.localizedDescription)
+        }
+
+        let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        let stdout = String(data: stdoutData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let stderr = String(data: stderrData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if process.terminationStatus != 0 {
+            return GitGtrResult(output: nil, error: stderr ?? "Process exited with code \(process.terminationStatus)")
+        }
+        return GitGtrResult(output: stdout, error: nil)
+    }
+
+    private func showWorktreeError(title: String, message: String) {
+        DispatchQueue.main.async {
+            let alert = NSAlert()
+            alert.messageText = title
+            alert.informativeText = message
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: String(localized: "worktree.error.ok", defaultValue: "OK"))
+            alert.runModal()
+        }
+    }
+
     func terminalPanelForWorkspaceConfigInheritanceSource() -> TerminalPanel? {
         terminalPanelForWorkspaceConfigInheritanceSource(workspace: selectedWorkspace)
     }
