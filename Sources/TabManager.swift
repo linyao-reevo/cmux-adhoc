@@ -3847,7 +3847,7 @@ class TabManager: ObservableObject {
         let stderr = String(data: stderrData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if process.terminationStatus != 0 {
-            return GitGtrResult(output: nil, error: stderr ?? "Process exited with code \(process.terminationStatus)")
+            return GitGtrResult(output: nil, error: stderr ?? String(localized: "worktree.error.processExitCode", defaultValue: "Process exited with code \(process.terminationStatus)"))
         }
         return GitGtrResult(output: stdout, error: nil)
     }
