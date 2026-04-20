@@ -351,6 +351,9 @@ struct TitlebarControlsView: View {
             .onReceive(NotificationCenter.default.publisher(for: .ghosttyDidFocusTab)) { _ in
                 refreshGitRepoStatus()
             }
+            .onReceive(NotificationCenter.default.publisher(for: .workspaceDidChangeDirectory)) { _ in
+                refreshGitRepoStatus()
+            }
     }
 
     private var titlebarHintTrailingInset: CGFloat {

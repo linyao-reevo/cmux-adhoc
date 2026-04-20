@@ -7689,6 +7689,7 @@ extension Notification.Name {
     static let feedbackComposerRequested = Notification.Name("cmux.feedbackComposerRequested")
     static let ghosttyDidSetTitle = Notification.Name("ghosttyDidSetTitle")
     static let ghosttyDidFocusTab = Notification.Name("ghosttyDidFocusTab")
+    static let workspaceDidChangeDirectory = Notification.Name("cmux.workspaceDidChangeDirectory")
     static let ghosttyDidFocusSurface = Notification.Name("ghosttyDidFocusSurface")
     static let ghosttyDidBecomeFirstResponderSurface = Notification.Name("ghosttyDidBecomeFirstResponderSurface")
     static let browserDidBecomeFirstResponderWebView = Notification.Name("browserDidBecomeFirstResponderWebView")

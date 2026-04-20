@@ -7712,6 +7712,7 @@ final class Workspace: Identifiable, ObservableObject {
         // Update current directory if this is the focused panel
         if panelId == focusedPanelId, currentDirectory != trimmed {
             currentDirectory = trimmed
+            NotificationCenter.default.post(name: .workspaceDidChangeDirectory, object: nil)
         }
     }
 
