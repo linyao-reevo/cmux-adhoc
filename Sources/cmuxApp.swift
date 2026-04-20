@@ -4185,9 +4185,10 @@ enum PreferredEditorSettings {
             return
         }
         let path = url.path
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/sh")
-        process.arguments = ["-c", "\(command) \(shellQuote(path))"]
+        process.executableURL = URL(fileURLWithPath: shell)
+        process.arguments = ["-l", "-c", "\(command) \(shellQuote(path))"]
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         do {
