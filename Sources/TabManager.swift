@@ -3834,6 +3834,9 @@ class TabManager: ObservableObject {
                     workingDirectory: worktreePath
                 )
                 workspace?.worktreeDirectory = worktreePath
+                #if DEBUG
+                dlog("worktree.create workspace=\(workspace?.id.uuidString.prefix(5) ?? "nil") worktreeDir=\(worktreePath)")
+                #endif
             }
         }
     }
