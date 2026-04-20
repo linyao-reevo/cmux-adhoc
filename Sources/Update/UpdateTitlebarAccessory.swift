@@ -117,7 +117,6 @@ struct TitlebarControlsStyleConfig {
 
 final class TitlebarControlsViewModel: ObservableObject {
     weak var notificationsAnchorView: NSView?
-    weak var worktreeButtonAnchorView: NSView?
 }
 
 extension Notification.Name {
@@ -423,10 +422,9 @@ struct TitlebarControlsView: View {
                 #if DEBUG
                 dlog("titlebar.newWorktreeTab")
                 #endif
-                WorktreePopoverController.shared.show(
-                    relativeTo: viewModel.worktreeButtonAnchorView,
-                    onSubmit: { name in onNewWorktreeTab(name) }
-                )
+                if let name = showWorktreeNameDialog() {
+                    onNewWorktreeTab(name)
+                }
             }) {
                 iconLabel(systemName: "arrow.triangle.branch", config: config)
                     .opacity(isInGitRepo ? 1.0 : 0.3)
@@ -435,7 +433,6 @@ struct TitlebarControlsView: View {
             .accessibilityIdentifier("titlebarControl.newWorktreeTab")
             .accessibilityLabel(String(localized: "titlebar.newWorktreeWorkspace.accessibilityLabel", defaultValue: "New Workspace with Worktree"))
             .safeHelp(String(localized: "titlebar.newWorktreeWorkspace.tooltip", defaultValue: "New workspace with worktree"))
-            .background(WorktreeButtonAnchorView { viewModel.worktreeButtonAnchorView = $0 })
 
         }
 
@@ -605,130 +602,28 @@ struct HiddenTitlebarSidebarControlsView: View {
     }
 }
 
-struct WorktreeButtonAnchorView: NSViewRepresentable {
-    let onResolve: (NSView) -> Void
-
-    func makeNSView(context: Context) -> NSView {
-        let view = AnchorNSView()
-        view.onLayout = { [weak view] in
-            guard let view else { return }
-            onResolve(view)
-        }
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {}
-}
-
-/// Manages the worktree name input popover using AppKit NSPopover directly,
-/// ensuring proper first-responder handling so keystrokes go to the text field
-/// instead of the terminal surface.
+/// Shows a modal dialog asking for a worktree branch name.
+/// Returns the trimmed name, or nil if the user cancelled.
 @MainActor
-final class WorktreePopoverController: NSObject, NSPopoverDelegate, NSTextFieldDelegate {
-    static let shared = WorktreePopoverController()
+func showWorktreeNameDialog() -> String? {
+    let alert = NSAlert()
+    alert.messageText = String(localized: "worktree.dialog.title", defaultValue: "New Workspace with Worktree")
+    alert.informativeText = String(localized: "worktree.dialog.message", defaultValue: "Enter a branch name for the new worktree:")
+    alert.addButton(withTitle: String(localized: "worktree.dialog.create", defaultValue: "Create"))
+    alert.addButton(withTitle: String(localized: "worktree.dialog.cancel", defaultValue: "Cancel"))
+    alert.alertStyle = .informational
 
-    private var popover: NSPopover?
-    private var textField: NSTextField?
-    private var onSubmit: ((String) -> Void)?
+    let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+    field.placeholderString = String(localized: "worktree.dialog.placeholder", defaultValue: "e.g. branch-A")
+    field.stringValue = ""
+    alert.accessoryView = field
+    alert.window.initialFirstResponder = field
 
-    func show(relativeTo anchorView: NSView?, onSubmit: @escaping (String) -> Void) {
-        guard let anchorView else { return }
+    let response = alert.runModal()
+    guard response == .alertFirstButtonReturn else { return nil }
 
-        // Close any existing popover
-        popover?.performClose(nil)
-
-        self.onSubmit = onSubmit
-
-        let field = NSTextField()
-        field.placeholderString = String(localized: "worktree.popover.placeholder", defaultValue: "Worktree name (e.g. branch-A)")
-        field.stringValue = ""
-        field.bezelStyle = .roundedBezel
-        field.delegate = self
-        field.translatesAutoresizingMaskIntoConstraints = false
-        self.textField = field
-
-        let createButton = NSButton(
-            title: String(localized: "worktree.popover.create", defaultValue: "Create"),
-            target: self,
-            action: #selector(createClicked)
-        )
-        createButton.keyEquivalent = "\r"
-        createButton.translatesAutoresizingMaskIntoConstraints = false
-
-        let cancelButton = NSButton(
-            title: String(localized: "worktree.popover.cancel", defaultValue: "Cancel"),
-            target: self,
-            action: #selector(cancelClicked)
-        )
-        cancelButton.keyEquivalent = "\u{1b}"
-        cancelButton.translatesAutoresizingMaskIntoConstraints = false
-
-        let buttonStack = NSStackView(views: [cancelButton, createButton])
-        buttonStack.orientation = .horizontal
-        buttonStack.spacing = 8
-        buttonStack.translatesAutoresizingMaskIntoConstraints = false
-
-        let container = NSStackView(views: [field, buttonStack])
-        container.orientation = .vertical
-        container.spacing = 8
-        container.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
-        container.translatesAutoresizingMaskIntoConstraints = false
-
-        NSLayoutConstraint.activate([
-            field.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
-        ])
-
-        let vc = NSViewController()
-        vc.view = container
-
-        let p = NSPopover()
-        p.contentViewController = vc
-        p.behavior = .semitransient
-        p.delegate = self
-        self.popover = p
-
-        p.show(relativeTo: anchorView.bounds, of: anchorView, preferredEdge: .maxY)
-
-        // Make the text field first responder after the popover is shown
-        DispatchQueue.main.async { [weak field] in
-            guard let field, let window = field.window else { return }
-            window.makeFirstResponder(field)
-        }
-    }
-
-    @objc private func createClicked() {
-        submitIfValid()
-    }
-
-    @objc private func cancelClicked() {
-        popover?.performClose(nil)
-    }
-
-    private func submitIfValid() {
-        guard let text = textField?.stringValue.trimmingCharacters(in: .whitespaces),
-              !text.isEmpty else { return }
-        let callback = onSubmit
-        popover?.performClose(nil)
-        callback?(text)
-    }
-
-    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
-            submitIfValid()
-            return true
-        }
-        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
-            popover?.performClose(nil)
-            return true
-        }
-        return false
-    }
-
-    func popoverDidClose(_ notification: Notification) {
-        textField = nil
-        onSubmit = nil
-        popover = nil
-    }
+    let trimmed = field.stringValue.trimmingCharacters(in: .whitespaces)
+    return trimmed.isEmpty ? nil : trimmed
 }
 
 enum TitlebarControlsVisibilityMode {
