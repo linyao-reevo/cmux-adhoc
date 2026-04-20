@@ -117,6 +117,7 @@ struct TitlebarControlsStyleConfig {
 
 final class TitlebarControlsViewModel: ObservableObject {
     weak var notificationsAnchorView: NSView?
+    weak var worktreeButtonAnchorView: NSView?
 }
 
 extension Notification.Name {
@@ -266,8 +267,6 @@ struct TitlebarControlsView: View {
     @State private var shortcutRefreshTick = 0
     @State private var isHoveringControls = false
     @State private var isNotificationsPopoverShown = false
-    @State private var isWorktreePopoverShown = false
-    @State private var worktreeName = ""
     @State private var isInGitRepo = false
     @StateObject private var modifierKeyMonitor = TitlebarShortcutHintModifierMonitor()
     private let titlebarHintRightSafetyShift: CGFloat = 10
@@ -424,7 +423,10 @@ struct TitlebarControlsView: View {
                 #if DEBUG
                 dlog("titlebar.newWorktreeTab")
                 #endif
-                isWorktreePopoverShown = true
+                WorktreePopoverController.shared.show(
+                    relativeTo: viewModel.worktreeButtonAnchorView,
+                    onSubmit: { name in onNewWorktreeTab(name) }
+                )
             }) {
                 iconLabel(systemName: "arrow.triangle.branch", config: config)
                     .opacity(isInGitRepo ? 1.0 : 0.3)
@@ -433,20 +435,7 @@ struct TitlebarControlsView: View {
             .accessibilityIdentifier("titlebarControl.newWorktreeTab")
             .accessibilityLabel(String(localized: "titlebar.newWorktreeWorkspace.accessibilityLabel", defaultValue: "New Workspace with Worktree"))
             .safeHelp(String(localized: "titlebar.newWorktreeWorkspace.tooltip", defaultValue: "New workspace with worktree"))
-            .popover(isPresented: $isWorktreePopoverShown) {
-                WorktreeNamePopover(
-                    worktreeName: $worktreeName,
-                    onSubmit: { name in
-                        isWorktreePopoverShown = false
-                        onNewWorktreeTab(name)
-                        worktreeName = ""
-                    },
-                    onCancel: {
-                        isWorktreePopoverShown = false
-                        worktreeName = ""
-                    }
-                )
-            }
+            .background(WorktreeButtonAnchorView { viewModel.worktreeButtonAnchorView = $0 })
 
         }
 
@@ -616,96 +605,129 @@ struct HiddenTitlebarSidebarControlsView: View {
     }
 }
 
-struct WorktreeNamePopover: View {
-    @Binding var worktreeName: String
-    let onSubmit: (String) -> Void
-    let onCancel: () -> Void
+struct WorktreeButtonAnchorView: NSViewRepresentable {
+    let onResolve: (NSView) -> Void
 
-    var body: some View {
-        VStack(spacing: 8) {
-            WorktreeTextField(
-                text: $worktreeName,
-                placeholder: String(localized: "worktree.popover.placeholder", defaultValue: "Worktree name (e.g. branch-A)"),
-                onSubmit: {
-                    let trimmed = worktreeName.trimmingCharacters(in: .whitespaces)
-                    guard !trimmed.isEmpty else { return }
-                    onSubmit(trimmed)
-                },
-                onCancel: onCancel
-            )
-            .frame(minWidth: 200, minHeight: 22)
-
-            HStack {
-                Spacer()
-                Button(String(localized: "worktree.popover.cancel", defaultValue: "Cancel")) {
-                    onCancel()
-                }
-                .keyboardShortcut(.cancelAction)
-                Button(String(localized: "worktree.popover.create", defaultValue: "Create")) {
-                    onSubmit(worktreeName.trimmingCharacters(in: .whitespaces))
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(worktreeName.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
+    func makeNSView(context: Context) -> NSView {
+        let view = AnchorNSView()
+        view.onLayout = { [weak view] in
+            guard let view else { return }
+            onResolve(view)
         }
-        .padding(12)
+        return view
     }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
-/// NSViewRepresentable text field that properly takes first responder
-/// from the terminal surface when displayed in a popover.
-private struct WorktreeTextField: NSViewRepresentable {
-    @Binding var text: String
-    let placeholder: String
-    let onSubmit: () -> Void
-    let onCancel: () -> Void
+/// Manages the worktree name input popover using AppKit NSPopover directly,
+/// ensuring proper first-responder handling so keystrokes go to the text field
+/// instead of the terminal surface.
+@MainActor
+final class WorktreePopoverController: NSObject, NSPopoverDelegate, NSTextFieldDelegate {
+    static let shared = WorktreePopoverController()
 
-    func makeNSView(context: Context) -> NSTextField {
+    private var popover: NSPopover?
+    private var textField: NSTextField?
+    private var onSubmit: ((String) -> Void)?
+
+    func show(relativeTo anchorView: NSView?, onSubmit: @escaping (String) -> Void) {
+        guard let anchorView else { return }
+
+        // Close any existing popover
+        popover?.performClose(nil)
+
+        self.onSubmit = onSubmit
+
         let field = NSTextField()
-        field.placeholderString = placeholder
-        field.stringValue = text
+        field.placeholderString = String(localized: "worktree.popover.placeholder", defaultValue: "Worktree name (e.g. branch-A)")
+        field.stringValue = ""
         field.bezelStyle = .roundedBezel
-        field.delegate = context.coordinator
-        // Steal first responder on next run loop tick so the popover is fully presented
-        DispatchQueue.main.async {
-            field.window?.makeFirstResponder(field)
+        field.delegate = self
+        field.translatesAutoresizingMaskIntoConstraints = false
+        self.textField = field
+
+        let createButton = NSButton(
+            title: String(localized: "worktree.popover.create", defaultValue: "Create"),
+            target: self,
+            action: #selector(createClicked)
+        )
+        createButton.keyEquivalent = "\r"
+        createButton.translatesAutoresizingMaskIntoConstraints = false
+
+        let cancelButton = NSButton(
+            title: String(localized: "worktree.popover.cancel", defaultValue: "Cancel"),
+            target: self,
+            action: #selector(cancelClicked)
+        )
+        cancelButton.keyEquivalent = "\u{1b}"
+        cancelButton.translatesAutoresizingMaskIntoConstraints = false
+
+        let buttonStack = NSStackView(views: [cancelButton, createButton])
+        buttonStack.orientation = .horizontal
+        buttonStack.spacing = 8
+        buttonStack.translatesAutoresizingMaskIntoConstraints = false
+
+        let container = NSStackView(views: [field, buttonStack])
+        container.orientation = .vertical
+        container.spacing = 8
+        container.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
+        container.translatesAutoresizingMaskIntoConstraints = false
+
+        NSLayoutConstraint.activate([
+            field.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
+        ])
+
+        let vc = NSViewController()
+        vc.view = container
+
+        let p = NSPopover()
+        p.contentViewController = vc
+        p.behavior = .semitransient
+        p.delegate = self
+        self.popover = p
+
+        p.show(relativeTo: anchorView.bounds, of: anchorView, preferredEdge: .maxY)
+
+        // Make the text field first responder after the popover is shown
+        DispatchQueue.main.async { [weak field] in
+            guard let field, let window = field.window else { return }
+            window.makeFirstResponder(field)
         }
-        return field
     }
 
-    func updateNSView(_ field: NSTextField, context: Context) {
-        if field.stringValue != text {
-            field.stringValue = text
-        }
+    @objc private func createClicked() {
+        submitIfValid()
     }
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(parent: self)
+    @objc private func cancelClicked() {
+        popover?.performClose(nil)
     }
 
-    final class Coordinator: NSObject, NSTextFieldDelegate {
-        var parent: WorktreeTextField
+    private func submitIfValid() {
+        guard let text = textField?.stringValue.trimmingCharacters(in: .whitespaces),
+              !text.isEmpty else { return }
+        let callback = onSubmit
+        popover?.performClose(nil)
+        callback?(text)
+    }
 
-        init(parent: WorktreeTextField) {
-            self.parent = parent
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            submitIfValid()
+            return true
         }
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            popover?.performClose(nil)
+            return true
+        }
+        return false
+    }
 
-        func controlTextDidChange(_ obj: Notification) {
-            guard let field = obj.object as? NSTextField else { return }
-            parent.text = field.stringValue
-        }
-
-        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
-                parent.onSubmit()
-                return true
-            }
-            if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
-                parent.onCancel()
-                return true
-            }
-            return false
-        }
+    func popoverDidClose(_ notification: Notification) {
+        textField = nil
+        onSubmit = nil
+        popover = nil
     }
 }
 
