@@ -256,6 +256,7 @@ struct TitlebarControlsView: View {
     let onToggleSidebar: () -> Void
     let onToggleNotifications: () -> Void
     let onNewTab: () -> Void
+    let onNewWorktreeTab: (String) -> Void
     let visibilityMode: TitlebarControlsVisibilityMode
     @AppStorage("titlebarControlsStyle") private var styleRawValue = TitlebarControlsStyle.classic.rawValue
     @AppStorage(ShortcutHintDebugSettings.titlebarHintXKey) private var titlebarShortcutHintXOffset = ShortcutHintDebugSettings.defaultTitlebarHintX
@@ -264,6 +265,8 @@ struct TitlebarControlsView: View {
     @State private var shortcutRefreshTick = 0
     @State private var isHoveringControls = false
     @State private var isNotificationsPopoverShown = false
+    @State private var isWorktreePopoverShown = false
+    @State private var worktreeName = ""
     @StateObject private var modifierKeyMonitor = TitlebarShortcutHintModifierMonitor()
     private let titlebarHintRightSafetyShift: CGFloat = 10
     private let titlebarHintBaseXShift: CGFloat = -10
@@ -408,6 +411,32 @@ struct TitlebarControlsView: View {
             .accessibilityLabel(String(localized: "titlebar.newWorkspace.accessibilityLabel", defaultValue: "New Workspace"))
             .safeHelp(KeyboardShortcutSettings.Action.newTab.tooltip(String(localized: "titlebar.newWorkspace.tooltip", defaultValue: "New workspace")))
 
+            TitlebarControlButton(config: config, action: {
+                #if DEBUG
+                dlog("titlebar.newWorktreeTab")
+                #endif
+                isWorktreePopoverShown = true
+            }) {
+                iconLabel(systemName: "arrow.triangle.branch", config: config)
+            }
+            .accessibilityIdentifier("titlebarControl.newWorktreeTab")
+            .accessibilityLabel(String(localized: "titlebar.newWorktreeWorkspace.accessibilityLabel", defaultValue: "New Workspace with Worktree"))
+            .safeHelp(String(localized: "titlebar.newWorktreeWorkspace.tooltip", defaultValue: "New workspace with worktree"))
+            .popover(isPresented: $isWorktreePopoverShown) {
+                WorktreeNamePopover(
+                    worktreeName: $worktreeName,
+                    onSubmit: { name in
+                        isWorktreePopoverShown = false
+                        onNewWorktreeTab(name)
+                        worktreeName = ""
+                    },
+                    onCancel: {
+                        isWorktreePopoverShown = false
+                        worktreeName = ""
+                    }
+                )
+            }
+
         }
 
         let paddedContent = content.padding(config.groupPadding)
@@ -544,7 +573,7 @@ struct HiddenTitlebarSidebarControlsView: View {
     @ObservedObject var notificationStore: TerminalNotificationStore
     @StateObject private var viewModel = TitlebarControlsViewModel()
 
-    private let hostWidth: CGFloat = 124
+    private let hostWidth: CGFloat = 152
     private let hostHeight: CGFloat = 28
 
     var body: some View {
@@ -559,9 +588,48 @@ struct HiddenTitlebarSidebarControlsView: View {
                 )
             },
             onNewTab: { _ = AppDelegate.shared?.tabManager?.addTab() },
+            onNewWorktreeTab: { name in _ = AppDelegate.shared?.tabManager?.addWorktreeWorkspace(name: name) },
             visibilityMode: .onHover
         )
         .frame(width: hostWidth, height: hostHeight, alignment: .leading)
+    }
+}
+
+struct WorktreeNamePopover: View {
+    @Binding var worktreeName: String
+    let onSubmit: (String) -> Void
+    let onCancel: () -> Void
+    @FocusState private var isTextFieldFocused: Bool
+
+    var body: some View {
+        VStack(spacing: 8) {
+            TextField(
+                String(localized: "worktree.popover.placeholder", defaultValue: "Worktree name (e.g. branch-A)"),
+                text: $worktreeName
+            )
+            .textFieldStyle(.roundedBorder)
+            .frame(minWidth: 200)
+            .focused($isTextFieldFocused)
+            .onSubmit {
+                guard !worktreeName.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+                onSubmit(worktreeName.trimmingCharacters(in: .whitespaces))
+            }
+
+            HStack {
+                Spacer()
+                Button(String(localized: "worktree.popover.cancel", defaultValue: "Cancel")) {
+                    onCancel()
+                }
+                .keyboardShortcut(.cancelAction)
+                Button(String(localized: "worktree.popover.create", defaultValue: "Create")) {
+                    onSubmit(worktreeName.trimmingCharacters(in: .whitespaces))
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(worktreeName.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(12)
+        .onAppear { isTextFieldFocused = true }
     }
 }
 
@@ -792,6 +860,7 @@ final class TitlebarControlsAccessoryViewController: NSTitlebarAccessoryViewCont
         let toggleSidebar = { _ = AppDelegate.shared?.sidebarState?.toggle() }
         let toggleNotifications: () -> Void = { _ = AppDelegate.shared?.toggleNotificationsPopover(animated: true) }
         let newTab = { _ = AppDelegate.shared?.tabManager?.addTab() }
+        let newWorktreeTab: (String) -> Void = { name in _ = AppDelegate.shared?.tabManager?.addWorktreeWorkspace(name: name) }
         hostingView = NonDraggableHostingView(
             rootView: TitlebarControlsView(
                 notificationStore: notificationStore,
@@ -799,6 +868,7 @@ final class TitlebarControlsAccessoryViewController: NSTitlebarAccessoryViewCont
                 onToggleSidebar: toggleSidebar,
                 onToggleNotifications: toggleNotifications,
                 onNewTab: newTab,
+                onNewWorktreeTab: newWorktreeTab,
                 visibilityMode: .alwaysVisible
             )
         )

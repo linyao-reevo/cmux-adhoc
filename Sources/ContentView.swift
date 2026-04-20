@@ -2841,6 +2841,7 @@ struct ContentView: View {
                 )
             },
             onNewTab: { tabManager.addTab() },
+            onNewWorktreeTab: { name in _ = AppDelegate.shared?.tabManager?.addWorktreeWorkspace(name: name) },
             visibilityMode: .alwaysVisible
         )
     }
