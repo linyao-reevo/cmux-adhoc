@@ -257,7 +257,7 @@ struct TitlebarControlsView: View {
     let onToggleNotifications: () -> Void
     let onNewTab: () -> Void
     let onNewWorktreeTab: (String) -> Void
-    let isCurrentWorkspaceInGitRepo: Bool
+    let checkIsInGitRepo: () -> Bool
     let visibilityMode: TitlebarControlsVisibilityMode
     @AppStorage("titlebarControlsStyle") private var styleRawValue = TitlebarControlsStyle.classic.rawValue
     @AppStorage(ShortcutHintDebugSettings.titlebarHintXKey) private var titlebarShortcutHintXOffset = ShortcutHintDebugSettings.defaultTitlebarHintX
@@ -268,6 +268,7 @@ struct TitlebarControlsView: View {
     @State private var isNotificationsPopoverShown = false
     @State private var isWorktreePopoverShown = false
     @State private var worktreeName = ""
+    @State private var isInGitRepo = false
     @StateObject private var modifierKeyMonitor = TitlebarShortcutHintModifierMonitor()
     private let titlebarHintRightSafetyShift: CGFloat = 10
     private let titlebarHintBaseXShift: CGFloat = -10
@@ -342,9 +343,13 @@ struct TitlebarControlsView: View {
             }
             .onAppear {
                 modifierKeyMonitor.start()
+                refreshGitRepoStatus()
             }
             .onDisappear {
                 modifierKeyMonitor.stop()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .ghosttyDidFocusTab)) { _ in
+                refreshGitRepoStatus()
             }
     }
 
@@ -419,9 +424,9 @@ struct TitlebarControlsView: View {
                 isWorktreePopoverShown = true
             }) {
                 iconLabel(systemName: "arrow.triangle.branch", config: config)
-                    .opacity(isCurrentWorkspaceInGitRepo ? 1.0 : 0.3)
+                    .opacity(isInGitRepo ? 1.0 : 0.3)
             }
-            .disabled(!isCurrentWorkspaceInGitRepo)
+            .disabled(!isInGitRepo)
             .accessibilityIdentifier("titlebarControl.newWorktreeTab")
             .accessibilityLabel(String(localized: "titlebar.newWorktreeWorkspace.accessibilityLabel", defaultValue: "New Workspace with Worktree"))
             .safeHelp(String(localized: "titlebar.newWorktreeWorkspace.tooltip", defaultValue: "New workspace with worktree"))
@@ -463,6 +468,10 @@ struct TitlebarControlsView: View {
                     titlebarShortcutHintOverlay(items: hintLayoutItems, config: config)
                 }
         }
+    }
+
+    private func refreshGitRepoStatus() {
+        isInGitRepo = checkIsInGitRepo()
     }
 
     private func titlebarHintLayoutItems(config: TitlebarControlsStyleConfig) -> [TitlebarHintLayoutItem] {
@@ -592,7 +601,7 @@ struct HiddenTitlebarSidebarControlsView: View {
             },
             onNewTab: { _ = AppDelegate.shared?.tabManager?.addTab() },
             onNewWorktreeTab: { name in _ = AppDelegate.shared?.tabManager?.addWorktreeWorkspace(name: name) },
-            isCurrentWorkspaceInGitRepo: Self.checkIsInGitRepo(),
+            checkIsInGitRepo: Self.checkIsInGitRepo,
             visibilityMode: .onHover
         )
         .frame(width: hostWidth, height: hostHeight, alignment: .leading)
@@ -883,7 +892,7 @@ final class TitlebarControlsAccessoryViewController: NSTitlebarAccessoryViewCont
                 onToggleNotifications: toggleNotifications,
                 onNewTab: newTab,
                 onNewWorktreeTab: newWorktreeTab,
-                isCurrentWorkspaceInGitRepo: Self.checkIsInGitRepo(),
+                checkIsInGitRepo: Self.checkIsInGitRepo,
                 visibilityMode: .alwaysVisible
             )
         )

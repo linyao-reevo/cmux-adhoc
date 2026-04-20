@@ -2842,7 +2842,7 @@ struct ContentView: View {
             },
             onNewTab: { tabManager.addTab() },
             onNewWorktreeTab: { name in _ = AppDelegate.shared?.tabManager?.addWorktreeWorkspace(name: name) },
-            isCurrentWorkspaceInGitRepo: TabManager.isInsideGitRepo(directory: tabManager.selectedWorkspace?.currentDirectory ?? ""),
+            checkIsInGitRepo: { TabManager.isInsideGitRepo(directory: tabManager.selectedWorkspace?.currentDirectory ?? "") },
             visibilityMode: .alwaysVisible
         )
     }
