@@ -620,21 +620,20 @@ struct WorktreeNamePopover: View {
     @Binding var worktreeName: String
     let onSubmit: (String) -> Void
     let onCancel: () -> Void
-    @FocusState private var isTextFieldFocused: Bool
 
     var body: some View {
         VStack(spacing: 8) {
-            TextField(
-                String(localized: "worktree.popover.placeholder", defaultValue: "Worktree name (e.g. branch-A)"),
-                text: $worktreeName
+            WorktreeTextField(
+                text: $worktreeName,
+                placeholder: String(localized: "worktree.popover.placeholder", defaultValue: "Worktree name (e.g. branch-A)"),
+                onSubmit: {
+                    let trimmed = worktreeName.trimmingCharacters(in: .whitespaces)
+                    guard !trimmed.isEmpty else { return }
+                    onSubmit(trimmed)
+                },
+                onCancel: onCancel
             )
-            .textFieldStyle(.roundedBorder)
-            .frame(minWidth: 200)
-            .focused($isTextFieldFocused)
-            .onSubmit {
-                guard !worktreeName.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-                onSubmit(worktreeName.trimmingCharacters(in: .whitespaces))
-            }
+            .frame(minWidth: 200, minHeight: 22)
 
             HStack {
                 Spacer()
@@ -650,7 +649,63 @@ struct WorktreeNamePopover: View {
             }
         }
         .padding(12)
-        .onAppear { isTextFieldFocused = true }
+    }
+}
+
+/// NSViewRepresentable text field that properly takes first responder
+/// from the terminal surface when displayed in a popover.
+private struct WorktreeTextField: NSViewRepresentable {
+    @Binding var text: String
+    let placeholder: String
+    let onSubmit: () -> Void
+    let onCancel: () -> Void
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField()
+        field.placeholderString = placeholder
+        field.stringValue = text
+        field.bezelStyle = .roundedBezel
+        field.delegate = context.coordinator
+        // Steal first responder on next run loop tick so the popover is fully presented
+        DispatchQueue.main.async {
+            field.window?.makeFirstResponder(field)
+        }
+        return field
+    }
+
+    func updateNSView(_ field: NSTextField, context: Context) {
+        if field.stringValue != text {
+            field.stringValue = text
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: WorktreeTextField
+
+        init(parent: WorktreeTextField) {
+            self.parent = parent
+        }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard let field = obj.object as? NSTextField else { return }
+            parent.text = field.stringValue
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                parent.onSubmit()
+                return true
+            }
+            if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+                parent.onCancel()
+                return true
+            }
+            return false
+        }
     }
 }
 
