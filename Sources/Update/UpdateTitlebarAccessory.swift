@@ -441,7 +441,7 @@ struct TitlebarControlsView: View {
                 #endif
                 onOpenInEditor()
             }) {
-                iconLabel(systemName: "square.and.pencil", config: config)
+                iconLabel(systemName: "note.text", config: config)
             }
             .accessibilityIdentifier("titlebarControl.openInEditor")
             .accessibilityLabel(String(localized: "titlebar.openInEditor.accessibilityLabel", defaultValue: "Open in Editor"))
