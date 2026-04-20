@@ -6558,6 +6558,8 @@ final class Workspace: Identifiable, ObservableObject {
     @Published var customColor: String?  // hex string, e.g. "#C0392B"
     @Published private(set) var terminalScrollBarHidden: Bool = false
     @Published var currentDirectory: String
+    /// The worktree directory this workspace was created with, if any.
+    var worktreeDirectory: String?
     private(set) var preferredBrowserProfileID: UUID?
 
     // MARK: - Typing Guard

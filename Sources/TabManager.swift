@@ -3829,10 +3829,11 @@ class TabManager: ObservableObject {
             }
 
             await MainActor.run {
-                _ = self?.addWorkspace(
+                let workspace = self?.addWorkspace(
                     title: name,
                     workingDirectory: worktreePath
                 )
+                workspace?.worktreeDirectory = worktreePath
             }
         }
     }

@@ -13606,6 +13606,15 @@ private struct TabItemView: View, Equatable {
             }
         }
 
+        if !isMulti, let worktreeDir = tab.worktreeDirectory {
+            Button(String(localized: "contextMenu.repositionToWorktree", defaultValue: "Reposition to Worktree")) {
+                if let panel = tab.focusedTerminalPanel {
+                    let escapedPath = worktreeDir.replacingOccurrences(of: "'", with: "'\\''")
+                    panel.sendInput("cd '\(escapedPath)'\n")
+                }
+            }
+        }
+
         if let copyableSidebarSSHError {
             Button(String(localized: "contextMenu.copySshError", defaultValue: "Copy SSH Error")) {
                 copyTextToPasteboard(copyableSidebarSSHError)
