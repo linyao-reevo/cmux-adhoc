@@ -3784,30 +3784,44 @@ class TabManager: ObservableObject {
         addWorkspace(select: select, eagerLoadTerminal: eagerLoadTerminal)
     }
 
-    /// Creates a git worktree via `git gtr new <name>`, resolves its path via
-    /// `git gtr go <name>`, then opens a new workspace rooted at that path.
-    /// On failure, shows an alert and falls back to a regular new workspace.
+    /// Creates a git worktree via `git worktree add` in a sibling
+    /// `<project>-worktrees/<branch>` directory, then opens a new workspace
+    /// rooted at that path. On failure, shows an alert and falls back to a
+    /// regular new workspace.
     func addWorktreeWorkspace(name: String) {
         let cwd = selectedWorkspace?.currentDirectory ?? FileManager.default.currentDirectoryPath
         Task.detached(priority: .userInitiated) { [weak self] in
-            let createResult = Self.runGitGtr(arguments: ["new", name], cwd: cwd)
-            if let error = createResult.error {
+            // Find the git repo root
+            guard let gitRoot = Self.findGitRoot(from: cwd) else {
                 await MainActor.run {
                     self?.showWorktreeError(
                         title: String(localized: "worktree.error.createTitle", defaultValue: "Failed to create worktree"),
-                        message: error
+                        message: String(localized: "worktree.error.notGitRepo", defaultValue: "The current directory is not inside a git repository")
                     )
                     _ = self?.addWorkspace()
                 }
                 return
             }
 
-            let goResult = Self.runGitGtr(arguments: ["go", name], cwd: cwd)
-            guard let worktreePath = goResult.output, !worktreePath.isEmpty else {
+            // Build worktree path: <project>-worktrees/<branch>
+            let projectName = (gitRoot as NSString).lastPathComponent
+            let parentDir = (gitRoot as NSString).deletingLastPathComponent
+            let worktreesDir = (parentDir as NSString).appendingPathComponent("\(projectName)-worktrees")
+            let worktreePath = (worktreesDir as NSString).appendingPathComponent(name)
+
+            // Create the worktrees directory if needed
+            try? FileManager.default.createDirectory(atPath: worktreesDir, withIntermediateDirectories: true)
+
+            // git worktree add <path> -b <branch>
+            let result = Self.runShellCommand(
+                arguments: ["git", "worktree", "add", worktreePath, "-b", name],
+                cwd: gitRoot
+            )
+            if let error = result.error {
                 await MainActor.run {
                     self?.showWorktreeError(
-                        title: String(localized: "worktree.error.resolvePath", defaultValue: "Failed to resolve worktree path"),
-                        message: goResult.error ?? String(localized: "worktree.error.emptyPath", defaultValue: "git gtr go returned an empty path")
+                        title: String(localized: "worktree.error.createTitle", defaultValue: "Failed to create worktree"),
+                        message: error
                     )
                     _ = self?.addWorkspace()
                 }
@@ -3823,15 +3837,35 @@ class TabManager: ObservableObject {
         }
     }
 
-    private struct GitGtrResult: Sendable {
+    /// Returns true if the given directory is inside a git repository.
+    nonisolated static func isInsideGitRepo(directory: String) -> Bool {
+        findGitRoot(from: directory) != nil
+    }
+
+    private nonisolated static func findGitRoot(from directory: String) -> String? {
+        let fm = FileManager.default
+        var current = directory
+        while true {
+            let gitPath = (current as NSString).appendingPathComponent(".git")
+            if fm.fileExists(atPath: gitPath) {
+                return current
+            }
+            let parent = (current as NSString).deletingLastPathComponent
+            if parent == current { break }
+            current = parent
+        }
+        return nil
+    }
+
+    private struct ShellCommandResult: Sendable {
         let output: String?
         let error: String?
     }
 
-    private nonisolated static func runGitGtr(arguments: [String], cwd: String) -> GitGtrResult {
+    private nonisolated static func runShellCommand(arguments: [String], cwd: String) -> ShellCommandResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["git", "gtr"] + arguments
+        process.arguments = arguments
         process.currentDirectoryURL = URL(fileURLWithPath: cwd)
 
         let stdoutPipe = Pipe()
@@ -3843,7 +3877,7 @@ class TabManager: ObservableObject {
             try process.run()
             process.waitUntilExit()
         } catch {
-            return GitGtrResult(output: nil, error: error.localizedDescription)
+            return ShellCommandResult(output: nil, error: error.localizedDescription)
         }
 
         let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
@@ -3853,9 +3887,9 @@ class TabManager: ObservableObject {
 
         if process.terminationStatus != 0 {
             let errorMessage = (stderr?.isEmpty == false) ? stderr! : String(localized: "worktree.error.processExitCode", defaultValue: "Process exited with code \(process.terminationStatus)")
-            return GitGtrResult(output: nil, error: errorMessage)
+            return ShellCommandResult(output: nil, error: errorMessage)
         }
-        return GitGtrResult(output: stdout, error: nil)
+        return ShellCommandResult(output: stdout, error: nil)
     }
 
     private func showWorktreeError(title: String, message: String) {

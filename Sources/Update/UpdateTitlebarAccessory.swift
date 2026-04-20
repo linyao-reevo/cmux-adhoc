@@ -257,6 +257,7 @@ struct TitlebarControlsView: View {
     let onToggleNotifications: () -> Void
     let onNewTab: () -> Void
     let onNewWorktreeTab: (String) -> Void
+    let isCurrentWorkspaceInGitRepo: Bool
     let visibilityMode: TitlebarControlsVisibilityMode
     @AppStorage("titlebarControlsStyle") private var styleRawValue = TitlebarControlsStyle.classic.rawValue
     @AppStorage(ShortcutHintDebugSettings.titlebarHintXKey) private var titlebarShortcutHintXOffset = ShortcutHintDebugSettings.defaultTitlebarHintX
@@ -418,7 +419,9 @@ struct TitlebarControlsView: View {
                 isWorktreePopoverShown = true
             }) {
                 iconLabel(systemName: "arrow.triangle.branch", config: config)
+                    .opacity(isCurrentWorkspaceInGitRepo ? 1.0 : 0.3)
             }
+            .disabled(!isCurrentWorkspaceInGitRepo)
             .accessibilityIdentifier("titlebarControl.newWorktreeTab")
             .accessibilityLabel(String(localized: "titlebar.newWorktreeWorkspace.accessibilityLabel", defaultValue: "New Workspace with Worktree"))
             .safeHelp(String(localized: "titlebar.newWorktreeWorkspace.tooltip", defaultValue: "New workspace with worktree"))
@@ -589,9 +592,15 @@ struct HiddenTitlebarSidebarControlsView: View {
             },
             onNewTab: { _ = AppDelegate.shared?.tabManager?.addTab() },
             onNewWorktreeTab: { name in _ = AppDelegate.shared?.tabManager?.addWorktreeWorkspace(name: name) },
+            isCurrentWorkspaceInGitRepo: Self.checkIsInGitRepo(),
             visibilityMode: .onHover
         )
         .frame(width: hostWidth, height: hostHeight, alignment: .leading)
+    }
+
+    private static func checkIsInGitRepo() -> Bool {
+        guard let cwd = AppDelegate.shared?.tabManager?.selectedWorkspace?.currentDirectory else { return false }
+        return TabManager.isInsideGitRepo(directory: cwd)
     }
 }
 
@@ -855,6 +864,11 @@ final class TitlebarControlsAccessoryViewController: NSTitlebarAccessoryViewCont
     var popoverIsShownForTesting: Bool { notificationsPopover.isShown }
     private var showsWorkspaceTitlebar: Bool { !WorkspacePresentationModeSettings.isMinimal() }
 
+    private static func checkIsInGitRepo() -> Bool {
+        guard let cwd = AppDelegate.shared?.tabManager?.selectedWorkspace?.currentDirectory else { return false }
+        return TabManager.isInsideGitRepo(directory: cwd)
+    }
+
     init(notificationStore: TerminalNotificationStore) {
         self.notificationStore = notificationStore
         let toggleSidebar = { _ = AppDelegate.shared?.sidebarState?.toggle() }
@@ -869,6 +883,7 @@ final class TitlebarControlsAccessoryViewController: NSTitlebarAccessoryViewCont
                 onToggleNotifications: toggleNotifications,
                 onNewTab: newTab,
                 onNewWorktreeTab: newWorktreeTab,
+                isCurrentWorkspaceInGitRepo: Self.checkIsInGitRepo(),
                 visibilityMode: .alwaysVisible
             )
         )
