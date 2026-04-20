@@ -13606,13 +13606,14 @@ private struct TabItemView: View, Equatable {
             }
         }
 
-        if !isMulti, let worktreeDir = tab.worktreeDirectory {
+        if !isMulti {
             Button(String(localized: "contextMenu.repositionToWorktree", defaultValue: "Reposition to Worktree")) {
-                if let panel = tab.focusedTerminalPanel {
+                if let worktreeDir = tab.worktreeDirectory, let panel = tab.focusedTerminalPanel {
                     let escapedPath = worktreeDir.replacingOccurrences(of: "'", with: "'\\''")
                     panel.sendInput("cd '\(escapedPath)'\n")
                 }
             }
+            .disabled(tab.worktreeDirectory == nil)
         }
 
         if let copyableSidebarSSHError {

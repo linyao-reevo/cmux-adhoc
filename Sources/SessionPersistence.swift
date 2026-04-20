@@ -335,6 +335,7 @@ struct SessionWorkspaceSnapshot: Codable, Sendable {
     var isPinned: Bool
     var terminalScrollBarHidden: Bool?
     var currentDirectory: String
+    var worktreeDirectory: String?
     var focusedPanelId: UUID?
     var layout: SessionWorkspaceLayoutSnapshot
     var panels: [SessionPanelSnapshot]
