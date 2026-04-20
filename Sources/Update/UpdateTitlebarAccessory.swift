@@ -257,6 +257,7 @@ struct TitlebarControlsView: View {
     let onToggleNotifications: () -> Void
     let onNewTab: () -> Void
     let onNewWorktreeTab: (String) -> Void
+    let onOpenInEditor: () -> Void
     let checkIsInGitRepo: () -> Bool
     let visibilityMode: TitlebarControlsVisibilityMode
     @AppStorage("titlebarControlsStyle") private var styleRawValue = TitlebarControlsStyle.classic.rawValue
@@ -434,6 +435,18 @@ struct TitlebarControlsView: View {
             .accessibilityLabel(String(localized: "titlebar.newWorktreeWorkspace.accessibilityLabel", defaultValue: "New Workspace with Worktree"))
             .safeHelp(String(localized: "titlebar.newWorktreeWorkspace.tooltip", defaultValue: "New workspace with worktree"))
 
+            TitlebarControlButton(config: config, action: {
+                #if DEBUG
+                dlog("titlebar.openInEditor")
+                #endif
+                onOpenInEditor()
+            }) {
+                iconLabel(systemName: "square.and.pencil", config: config)
+            }
+            .accessibilityIdentifier("titlebarControl.openInEditor")
+            .accessibilityLabel(String(localized: "titlebar.openInEditor.accessibilityLabel", defaultValue: "Open in Editor"))
+            .safeHelp(String(localized: "titlebar.openInEditor.tooltip", defaultValue: "Open current directory in editor"))
+
         }
 
         let paddedContent = content.padding(config.groupPadding)
@@ -574,7 +587,7 @@ struct HiddenTitlebarSidebarControlsView: View {
     @ObservedObject var notificationStore: TerminalNotificationStore
     @StateObject private var viewModel = TitlebarControlsViewModel()
 
-    private let hostWidth: CGFloat = 152
+    private let hostWidth: CGFloat = 180
     private let hostHeight: CGFloat = 28
 
     var body: some View {
@@ -590,6 +603,7 @@ struct HiddenTitlebarSidebarControlsView: View {
             },
             onNewTab: { _ = AppDelegate.shared?.tabManager?.addTab() },
             onNewWorktreeTab: { name in _ = AppDelegate.shared?.tabManager?.addWorktreeWorkspace(name: name) },
+            onOpenInEditor: { Self.openCurrentDirectoryInEditor() },
             checkIsInGitRepo: Self.checkIsInGitRepo,
             visibilityMode: .onHover
         )
@@ -599,6 +613,11 @@ struct HiddenTitlebarSidebarControlsView: View {
     private static func checkIsInGitRepo() -> Bool {
         guard let cwd = AppDelegate.shared?.tabManager?.selectedWorkspace?.currentDirectory else { return false }
         return TabManager.isInsideGitRepo(directory: cwd)
+    }
+
+    private static func openCurrentDirectoryInEditor() {
+        guard let cwd = AppDelegate.shared?.tabManager?.selectedWorkspace?.currentDirectory else { return }
+        PreferredEditorSettings.open(URL(fileURLWithPath: cwd))
     }
 }
 
@@ -853,6 +872,11 @@ final class TitlebarControlsAccessoryViewController: NSTitlebarAccessoryViewCont
         return TabManager.isInsideGitRepo(directory: cwd)
     }
 
+    private static func openCurrentDirectoryInEditor() {
+        guard let cwd = AppDelegate.shared?.tabManager?.selectedWorkspace?.currentDirectory else { return }
+        PreferredEditorSettings.open(URL(fileURLWithPath: cwd))
+    }
+
     init(notificationStore: TerminalNotificationStore) {
         self.notificationStore = notificationStore
         let toggleSidebar = { _ = AppDelegate.shared?.sidebarState?.toggle() }
@@ -867,6 +891,7 @@ final class TitlebarControlsAccessoryViewController: NSTitlebarAccessoryViewCont
                 onToggleNotifications: toggleNotifications,
                 onNewTab: newTab,
                 onNewWorktreeTab: newWorktreeTab,
+                onOpenInEditor: Self.openCurrentDirectoryInEditor,
                 checkIsInGitRepo: Self.checkIsInGitRepo,
                 visibilityMode: .alwaysVisible
             )

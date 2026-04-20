@@ -2842,6 +2842,11 @@ struct ContentView: View {
             },
             onNewTab: { tabManager.addTab() },
             onNewWorktreeTab: { name in _ = AppDelegate.shared?.tabManager?.addWorktreeWorkspace(name: name) },
+            onOpenInEditor: {
+                if let cwd = tabManager.selectedWorkspace?.currentDirectory {
+                    PreferredEditorSettings.open(URL(fileURLWithPath: cwd))
+                }
+            },
             checkIsInGitRepo: { TabManager.isInsideGitRepo(directory: tabManager.selectedWorkspace?.currentDirectory ?? "") },
             visibilityMode: .alwaysVisible
         )
